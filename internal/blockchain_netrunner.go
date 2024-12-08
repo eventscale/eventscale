@@ -75,8 +75,8 @@ func InitNetRunner(ctx Context, conf NetRunnerConfig) (*NetRunner, error) {
 	}
 
 	chainClient := NewBlockchainClient(conf.NetConf.Name, ethClient)
-	blockListener := NewBlockListener(conf.NetConf.BlocksProcessing, chainClient, ctx.JetStream)
-	eventExtractor := NewEventExtractor(chainClient, ctx.JetStream, targets)
+	blockListener := NewBlockListener(conf.NetConf.BlocksProcessing, chainClient, ctx.Logger, ctx.JetStream)
+	eventExtractor := NewEventExtractor(chainClient, ctx.Logger, ctx.JetStream, targets)
 
 	return &NetRunner{
 		chainClient:    chainClient,

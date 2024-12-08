@@ -16,12 +16,14 @@ package internal
 import (
 	"context"
 
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
 type Context struct {
 	context.Context
 	jetstream.JetStream
+	Logger server.Logger
 }
 
 func (c *Context) Publisher() jetstream.Publisher {

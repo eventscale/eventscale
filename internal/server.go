@@ -17,6 +17,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -34,6 +35,8 @@ func StartServer(ctx context.Context, confPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to start nats server: %w", err)
 	}
+
+	commonLogger := natsServer.Logger()
 
 	natsConn, err := nats.Connect(natsServer.ClientURL())
 	if err != nil {
@@ -56,9 +59,12 @@ func StartServer(ctx context.Context, confPath string) error {
 		return fmt.Errorf("failed to create stream: %w", err)
 	}
 
+	commonLogger.Noticef("Eventscale stream created")
+
 	extCtx := Context{
 		Context:   ctx,
 		JetStream: js,
+		Logger:    commonLogger,
 	}
 
 	runners := make([]*NetRunner, 0, len(cfg.Networks))
@@ -70,13 +76,14 @@ func StartServer(ctx context.Context, confPath string) error {
 		if err != nil {
 			return fmt.Errorf("failed to init net runner: %w", err)
 		}
-		runners = append(runners, runner)
-	}
 
-	for _, r := range runners {
-		if err := r.Register(extCtx); err != nil {
+		if err := runner.Register(extCtx); err != nil {
 			return fmt.Errorf("failed to register net runner: %w", err)
 		}
+
+		commonLogger.Noticef("Blockchain netrunner [%s] initialized and registered", net.Name)
+
+		runners = append(runners, runner)
 	}
 
 	eventProducer := NewEventProducer(cfg.Events, js)
@@ -95,13 +102,25 @@ func StartServer(ctx context.Context, confPath string) error {
 		return fmt.Errorf("failed to consume event-extractor: %w", err)
 	}
 
+	commonLogger.Noticef("Event extractor consumer created")
+
+	wg := sync.WaitGroup{}
+	wg.Add(len(runners))
+
 	for _, r := range runners {
-		if err := r.Start(ctx); err != nil {
-			return fmt.Errorf("failed to start net runner: %w", err)
-		}
+		go func(netr *NetRunner) {
+			defer wg.Done()
+			commonLogger.Noticef("Starting netrunner [%s]", netr.chainClient.Name())
+			if err := netr.Start(ctx); err != nil {
+				commonLogger.Errorf("Failed to start netrunner [%s]: %v", netr.chainClient.Name(), err)
+			}
+		}(r)
 	}
 
+	commonLogger.Noticef("Eventscale is ready")
+
 	natsServer.WaitForShutdown()
+	wg.Wait()
 
 	return nil
 }

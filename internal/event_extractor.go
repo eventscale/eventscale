@@ -25,6 +25,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -36,13 +37,14 @@ type TargetEvent struct {
 }
 
 type EventExtractor struct {
+	logger      server.Logger
 	events      map[common.Hash]*TargetEvent
 	contracts   map[common.Address]struct{}
 	chainClient *BlockchainClient
 	pub         jetstream.Publisher
 }
 
-func NewEventExtractor(chainClient *BlockchainClient, pub jetstream.Publisher, target []*TargetEvent) *EventExtractor {
+func NewEventExtractor(chainClient *BlockchainClient, log server.Logger, pub jetstream.Publisher, target []*TargetEvent) *EventExtractor {
 	uniqueContracts := make(map[common.Address]struct{})
 	for _, e := range target {
 		for _, c := range e.Contracts {
@@ -56,6 +58,7 @@ func NewEventExtractor(chainClient *BlockchainClient, pub jetstream.Publisher, t
 	}
 
 	return &EventExtractor{
+		logger:      log,
 		events:      uniqueEvents,
 		contracts:   uniqueContracts,
 		chainClient: chainClient,
@@ -72,6 +75,8 @@ func (e *EventExtractor) HandleMsg(ctx context.Context, msg jetstream.Msg) error
 	if err := json.Unmarshal(msg.Data(), &br); err != nil {
 		return fmt.Errorf("failed to unmarshal blocks range: %w", err)
 	}
+
+	e.logger.Debugf("[%s] [EventExtractor] Processing blocks range: %d - %d", e.chainClient.Name(), br.Start, br.End)
 
 	logs, err := e.chainClient.FilterLogs(ctx, ethereum.FilterQuery{
 		FromBlock: big.NewInt(int64(br.Start)),

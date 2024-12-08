@@ -1,0 +1,6 @@
+services:
+  eventscale:
+    image: eventscale:0.1
+    command: ["-c", "/eventscale/conf/config.yaml"]
+    ports:
+      - "4222:4222"

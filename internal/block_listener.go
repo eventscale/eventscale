@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -28,13 +29,15 @@ type BlocksRange struct {
 }
 
 type BlockListener struct {
+	logger      server.Logger
 	cfg         BlocksProcessingConfig
 	chainClient *BlockchainClient
 	pub         jetstream.Publisher
 }
 
-func NewBlockListener(cfg BlocksProcessingConfig, chainClient *BlockchainClient, pub jetstream.Publisher) *BlockListener {
+func NewBlockListener(cfg BlocksProcessingConfig, chainClient *BlockchainClient, log server.Logger, pub jetstream.Publisher) *BlockListener {
 	return &BlockListener{
+		logger:      log,
 		cfg:         cfg,
 		chainClient: chainClient,
 		pub:         pub,
@@ -80,6 +83,8 @@ func (l *BlockListener) Listen(ctx context.Context) error {
 			if err = l.publishNewBlocks(br); err != nil {
 				continue
 			}
+
+			l.logger.Debugf("[%s] [BlockListener] Published new blocks range: %d - %d", l.chainClient.Name(), br.Start, br.End)
 
 			startedBlock += blockRange
 		}
