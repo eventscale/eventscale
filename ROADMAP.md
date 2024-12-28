@@ -1,6 +1,6 @@
 # ROADMAP
 
-## v0.1 - Proof-of-Concept (We're Here!)
+## v0.1 - Proof-of-Concept
 
 - [x] Define Eventscale architecture
 - [x] Design Eventscale configuration
@@ -10,8 +10,10 @@
 - [x] Extracts events from blockchain using `go-ethereum`
 - [x] Publishes events to NATS subjects, which are defined in configuration 
 
-## v0.2
+## v0.2 (We're Here!)
 
+- [x] SDK for Go
+- [x] Examples for Go
 - [x] Docker support
 
 ## v0.3
@@ -28,9 +30,13 @@
 
 ## v0.5
 
-- [ ] Add SDK for JS/TS
-- [ ] Add JS/TS examples
+- [ ] SDK for JS/TS
+- [ ] JS/TS Examples
 
 ## v0.6
+
+- [ ] Filtering Options for event subscription, a.k.a Event Handler
+
+## v0.7
 
 - [ ] Project structure redesign for modularity and SDK
