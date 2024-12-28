@@ -1,5 +1,14 @@
-# Eventscale
-Blockchain Events, Simply Scaled
+<h1 align="center">
+  <picture align="center">
+    <img src="./docs/logo.svg" width="600" alt="Eventscale Logo">
+  </picture>
+</h1>
+
+<p align="center">
+  <b>Blockchain Events, Simply Scaled</b>
+</p>
+
+---
 
 ## Abstract
 Eventscale is a service for extracting and streaming blockchain events from EVM-based blockchains.
