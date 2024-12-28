@@ -22,12 +22,12 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-type EventPriducer struct {
+type EventProducer struct {
 	networks map[BlockchainName]map[common.Address]string
 	pub      jetstream.Publisher
 }
 
-func NewEventProducer(configs []EventConfig, pub jetstream.Publisher) *EventPriducer {
+func NewEventProducer(configs []EventConfig, pub jetstream.Publisher) *EventProducer {
 	allNetworks := make(map[BlockchainName]map[common.Address]string)
 	for _, config := range configs {
 		for net, contracts := range config.Networks {
@@ -40,13 +40,13 @@ func NewEventProducer(configs []EventConfig, pub jetstream.Publisher) *EventPrid
 		}
 	}
 
-	return &EventPriducer{
+	return &EventProducer{
 		networks: allNetworks,
 		pub:      pub,
 	}
 }
 
-func (p *EventPriducer) HandleMsg(ctx context.Context, msg jetstream.Msg) error {
+func (p *EventProducer) HandleMsg(ctx context.Context, msg jetstream.Msg) error {
 	events := make([]Event, 0)
 
 	if err := json.Unmarshal(msg.Data(), &events); err != nil {
