@@ -88,6 +88,8 @@ func (e *EventExtractor) HandleMsg(ctx context.Context, msg jetstream.Msg) error
 		return fmt.Errorf("failed to get logs: %w", err)
 	}
 
+	e.logger.Debugf("[%s] [EventExtractor] Found %d logs", e.chainClient.Name(), len(logs))
+
 	events, err := e.parseLogs(logs)
 	if err != nil {
 		return fmt.Errorf("failed to parse logs: %w", err)
@@ -128,6 +130,7 @@ func (ext *EventExtractor) getTopics() []common.Hash {
 }
 
 func (ext *EventExtractor) parseLogs(logs []types.Log) ([]Event, error) {
+	txs := make(map[common.Hash]*types.Receipt)
 	events := make([]Event, 0, len(logs))
 	for _, log := range logs {
 		view, ok := ext.events[log.Topics[0]]
@@ -145,7 +148,7 @@ func (ext *EventExtractor) parseLogs(logs []types.Log) ([]Event, error) {
 			return nil, fmt.Errorf("failed to marshal data: %w", err)
 		}
 
-		events = append(events, Event{
+		ev := Event{
 			MetaData: EventMetadata{
 				Network:     ext.chainClient.Name(),
 				ChainID:     ext.chainClient.ChainID(),
@@ -160,7 +163,21 @@ func (ext *EventExtractor) parseLogs(logs []types.Log) ([]Event, error) {
 				Timestamp:   time.Now().Unix(),
 			},
 			Data: bytes,
-		})
+		}
+
+		if receipt, ok := txs[log.TxHash]; ok {
+			ev.MetaData.OtherLogs = receipt.Logs
+		} else {
+			receipt, err := ext.chainClient.TransactionReceipt(context.Background(), log.TxHash)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get transaction receipt: %w", err)
+			}
+
+			ev.MetaData.OtherLogs = receipt.Logs
+			txs[log.TxHash] = receipt
+		}
+
+		events = append(events, ev)
 	}
 	return events, nil
 }

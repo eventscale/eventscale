@@ -17,6 +17,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 )
 
 type Event struct {
@@ -40,6 +41,9 @@ type EventMetadata struct {
 	LogIndex    uint        `json:"log_index"`
 
 	// Mayber easier to get log location from ethereum.Log ?
+
+	// Other logs from the same transaction
+	OtherLogs []*types.Log `json:"other_logs"`
 
 	Timestamp int64 `json:"timestamp"`
 }

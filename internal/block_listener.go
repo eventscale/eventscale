@@ -53,42 +53,91 @@ func (l *BlockListener) Listen(ctx context.Context) error {
 	defer ticker.Stop()
 
 	startedBlock := l.cfg.StartFrom
+	if l.cfg.StartFrom == 0 {
+		currentBlock, err := l.chainClient.BlockNumber(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get current block number: %w", err)
+		}
+
+		startedBlock = currentBlock
+	}
+
+	l.logger.Debugf("[%s] [BlockListener] Started from block: %d", l.chainClient.Name(), startedBlock)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			currentBlock, err := l.chainClient.BlockNumber(ctx)
+			newStartedBlock, err := l.processBlocks(ctx, startedBlock)
 			if err != nil {
+				l.logger.Errorf("[%s] [BlockListener] Failed to process blocks: %v", l.chainClient.Name(), err)
 				continue
 			}
-
-			if startedBlock > currentBlock {
-				startedBlock = currentBlock
-			}
-
-			blockRange := currentBlock - startedBlock
-			if blockRange > l.cfg.BatchLimit {
-				blockRange = l.cfg.BatchLimit
-			}
-
-			endBlock := startedBlock + blockRange - 1
-
-			br := BlocksRange{
-				Start: startedBlock,
-				End:   endBlock,
-			}
-
-			if err = l.publishNewBlocks(br); err != nil {
-				continue
-			}
-
-			l.logger.Debugf("[%s] [BlockListener] Published new blocks range: %d - %d", l.chainClient.Name(), br.Start, br.End)
-
-			startedBlock += blockRange
+			startedBlock = newStartedBlock
 		}
 	}
+}
+
+// processBlocks handles the complete block processing cycle and returns the new starting block
+func (l *BlockListener) processBlocks(ctx context.Context, startedBlock uint64) (uint64, error) {
+	currentBlock, err := l.getCurrentBlock(ctx)
+	if err != nil {
+		return startedBlock, err
+	}
+
+	// Skip processing if started block is higher than current block
+	if startedBlock > currentBlock {
+		l.logger.Debugf("[%s] [BlockListener] Started block %d is ahead of current block %d, skipping", l.chainClient.Name(), startedBlock, currentBlock)
+		return startedBlock, nil
+	}
+
+	// Calculate block range to process
+	blocksRange, hasNewBlocks := l.calculateBlockRange(startedBlock, currentBlock)
+	if !hasNewBlocks {
+		l.logger.Debugf("[%s] [BlockListener] No new blocks to process", l.chainClient.Name())
+		return startedBlock, nil
+	}
+
+	// Publish the new blocks range
+	if err := l.publishNewBlocks(blocksRange); err != nil {
+		return startedBlock, fmt.Errorf("failed to publish blocks range %d-%d: %w", blocksRange.Start, blocksRange.End, err)
+	}
+
+	l.logger.Debugf("[%s] [BlockListener] Published new blocks range: %d - %d", l.chainClient.Name(), blocksRange.Start, blocksRange.End)
+
+	// Return the next starting block
+	return blocksRange.End + 1, nil
+}
+
+// getCurrentBlock fetches the current block number from the blockchain
+func (l *BlockListener) getCurrentBlock(ctx context.Context) (uint64, error) {
+	currentBlock, err := l.chainClient.BlockNumber(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get current block number: %w", err)
+	}
+	return currentBlock, nil
+}
+
+// calculateBlockRange determines the range of blocks to process
+func (l *BlockListener) calculateBlockRange(startedBlock, currentBlock uint64) (BlocksRange, bool) {
+	if startedBlock > currentBlock {
+		return BlocksRange{}, false
+	}
+
+	// Calculate how many blocks we can process (including the current block)
+	availableBlocks := currentBlock - startedBlock + 1
+	blockRange := min(availableBlocks, l.cfg.BatchLimit)
+	if blockRange == 0 {
+		return BlocksRange{}, false
+	}
+
+	endBlock := startedBlock + blockRange - 1
+
+	return BlocksRange{
+		Start: startedBlock,
+		End:   endBlock,
+	}, true
 }
 
 func (l *BlockListener) publishNewBlocks(r BlocksRange) error {
