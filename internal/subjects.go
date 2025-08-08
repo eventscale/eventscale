@@ -16,18 +16,23 @@ package internal
 const (
 	STREAM_NAME = "eventscale"
 
-	SYSTEM_NEW_BLOCKS_SUBJECT      = "eventscale.system.new_blocks"
-	SYSTEM_EVENT_EXTRACTOR_SUBJECT = "eventscale.system.event.extractor"
+	SYSTEM_NEW_BLOCKS_SUBJECT                = "eventscale.system.new_blocks"
+	SYSTEM_EVENT_EXTRACTOR_SUBJECT           = "eventscale.system.event.extractor"
+	SYSTEM_EVENT_ADD_EVENT_EXTRACTOR_SUBJECT = "eventscale.system.add_event.extractor"
 
 	EVENTS_SUBJECT = "eventscale.events"
 )
 
-func NetwrokEventExtractorSubject(net string) string {
+func NetworkEventExtractorSubject(net string) string {
 	return SYSTEM_EVENT_EXTRACTOR_SUBJECT + "." + net
 }
 
-func NetwrokNewBlocksSubject(net string) string {
+func NetworkNewBlocksSubject(net string) string {
 	return SYSTEM_NEW_BLOCKS_SUBJECT + "." + net
+}
+
+func NetworkAddEventExtractorSubject(net string) string {
+	return SYSTEM_EVENT_ADD_EVENT_EXTRACTOR_SUBJECT + "." + net
 }
 
 func EventSubject(net string, contract string, eventName string) string {

@@ -16,7 +16,9 @@ package eventscale
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/eventscale/eventscale/internal"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -53,11 +55,49 @@ func EventHandlerWrapper(handler EventHandlerFunc) jetstream.MessageHandler {
 			return
 		}
 
-		if err := handler(context.TODO(), Event{event}); err != nil {
+		if err := handler(context.TODO(), Event{event, msg.Subject()}); err != nil {
 			msg.Nak()
 			return
 		}
 
 		msg.Ack()
 	}
+}
+
+type TargetEvent struct {
+	Network       string           `json:"-"`
+	Name          string           `json:"name"`
+	Signature     string           `json:"signature"`
+	Contracts     []common.Address `json:"contracts"`
+	NeedOtherLogs bool             `json:"need_other_logs"`
+}
+
+func (c *Context) AddTargetEventSync(ctx context.Context, event TargetEvent) error {
+	subj := internal.NetworkAddEventExtractorSubject(event.Network)
+
+	bytes, err := json.Marshal(&event)
+	if err != nil {
+		return fmt.Errorf("failed to marshal event: %w", err)
+	}
+
+	if _, err := c.Publish(ctx, subj, bytes); err != nil {
+		return fmt.Errorf("failed to publish event: %w", err)
+	}
+
+	return nil
+}
+
+func (c *Context) AddTargetEventAsync(ctx context.Context, event TargetEvent) error {
+	subj := internal.NetworkAddEventExtractorSubject(event.Network)
+
+	bytes, err := json.Marshal(&event)
+	if err != nil {
+		return fmt.Errorf("failed to marshal event: %w", err)
+	}
+
+	if _, err := c.PublishAsync(subj, bytes); err != nil {
+		return fmt.Errorf("failed to publish event: %w", err)
+	}
+
+	return nil
 }

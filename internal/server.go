@@ -98,7 +98,7 @@ func StartServer(ctx context.Context, confPath string) error {
 		return fmt.Errorf("failed to create consumer event-extractor: %w", err)
 	}
 
-	if _, err := extCons.Consume(messageHandlerWrapper(eventProducer)); err != nil {
+	if _, err := extCons.Consume(messageHandlerWrapper(eventProducer.HandleEvents)); err != nil {
 		return fmt.Errorf("failed to consume event-extractor: %w", err)
 	}
 

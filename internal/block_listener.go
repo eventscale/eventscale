@@ -88,7 +88,7 @@ func (l *BlockListener) processBlocks(ctx context.Context, startedBlock uint64) 
 
 	// Skip processing if started block is higher than current block
 	if startedBlock > currentBlock {
-		l.logger.Debugf("[%s] [BlockListener] Started block %d is ahead of current block %d, skipping", l.chainClient.Name(), startedBlock, currentBlock)
+		l.logger.Tracef("[%s] [BlockListener] Started block %d is ahead of current block %d, skipping", l.chainClient.Name(), startedBlock, currentBlock)
 		return startedBlock, nil
 	}
 
@@ -145,9 +145,11 @@ func (l *BlockListener) publishNewBlocks(r BlocksRange) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal new blocks: %w", err)
 	}
+
 	_, err = l.pub.PublishAsync(l.TargetSubject(), bytes)
 	if err != nil {
 		return fmt.Errorf("failed to publish new blocks: %w", err)
 	}
+
 	return nil
 }

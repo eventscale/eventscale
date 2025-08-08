@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/avelex/abidec"
@@ -30,18 +31,22 @@ import (
 )
 
 type TargetEvent struct {
-	Name      string
-	Signature string
-	Contracts []common.Address
-	Abi       abi.Event
+	Name          string           `json:"name"`
+	Signature     string           `json:"signature"`
+	Contracts     []common.Address `json:"contracts"`
+	NeedOtherLogs bool             `json:"need_other_logs"`
+
+	Abi abi.Event `json:"-"`
 }
 
 type EventExtractor struct {
 	logger      server.Logger
-	events      map[common.Hash]*TargetEvent
-	contracts   map[common.Address]struct{}
 	chainClient *BlockchainClient
 	pub         jetstream.Publisher
+
+	lock      *sync.RWMutex
+	events    map[common.Hash]*TargetEvent
+	contracts map[common.Address]struct{}
 }
 
 func NewEventExtractor(chainClient *BlockchainClient, log server.Logger, pub jetstream.Publisher, target []*TargetEvent) *EventExtractor {
@@ -54,6 +59,7 @@ func NewEventExtractor(chainClient *BlockchainClient, log server.Logger, pub jet
 
 	uniqueEvents := make(map[common.Hash]*TargetEvent)
 	for _, e := range target {
+		e.NeedOtherLogs = true
 		uniqueEvents[e.Abi.ID] = e
 	}
 
@@ -63,6 +69,7 @@ func NewEventExtractor(chainClient *BlockchainClient, log server.Logger, pub jet
 		contracts:   uniqueContracts,
 		chainClient: chainClient,
 		pub:         pub,
+		lock:        &sync.RWMutex{},
 	}
 }
 
@@ -70,13 +77,39 @@ func (e *EventExtractor) TargetSubject() string {
 	return SYSTEM_EVENT_EXTRACTOR_SUBJECT + "." + e.chainClient.Name()
 }
 
-func (e *EventExtractor) HandleMsg(ctx context.Context, msg jetstream.Msg) error {
-	var br BlocksRange
-	if err := json.Unmarshal(msg.Data(), &br); err != nil {
-		return fmt.Errorf("failed to unmarshal blocks range: %w", err)
+func (e *EventExtractor) HandleAddEventExtractor(ctx context.Context, msg jetstream.Msg) error {
+	var event TargetEvent
+	if err := json.Unmarshal(msg.Data(), &event); err != nil {
+		return fmt.Errorf("failed to unmarshal event: %w", err)
 	}
 
-	e.logger.Debugf("[%s] [EventExtractor] Processing blocks range: %d - %d", e.chainClient.Name(), br.Start, br.End)
+	e.logger.Debugf("[%s] [EventExtractor] Adding event: %s", e.chainClient.Name(), event.Name)
+
+	abiEv, err := abidec.ParseEventSignature(event.Signature)
+	if err != nil {
+		e.logger.Errorf("[%s] [EventExtractor] Failed to parse event signature: %v", e.chainClient.Name(), err)
+		return fmt.Errorf("failed to parse event signature: %w", err)
+	}
+
+	event.Abi = abiEv
+
+	e.lock.Lock()
+	for _, c := range event.Contracts {
+		e.contracts[c] = struct{}{}
+	}
+
+	e.events[event.Abi.ID] = &event
+	e.lock.Unlock()
+
+	return nil
+}
+
+func (e *EventExtractor) HandleBlocksRange(ctx context.Context, msg jetstream.Msg) error {
+	var br BlocksRange
+	if err := json.Unmarshal(msg.Data(), &br); err != nil {
+		e.logger.Errorf("[%s] [EventExtractor] Failed to unmarshal blocks range: %v", e.chainClient.Name(), err)
+		return fmt.Errorf("failed to unmarshal blocks range: %w", err)
+	}
 
 	logs, err := e.chainClient.FilterLogs(ctx, ethereum.FilterQuery{
 		FromBlock: big.NewInt(int64(br.Start)),
@@ -85,19 +118,18 @@ func (e *EventExtractor) HandleMsg(ctx context.Context, msg jetstream.Msg) error
 		Topics:    [][]common.Hash{e.getTopics()},
 	})
 	if err != nil {
+		e.logger.Errorf("[%s] [EventExtractor] Failed to get logs: %v", e.chainClient.Name(), err)
 		return fmt.Errorf("failed to get logs: %w", err)
 	}
 
-	e.logger.Debugf("[%s] [EventExtractor] Found %d logs", e.chainClient.Name(), len(logs))
+	e.logger.Tracef("[%s] [EventExtractor] Found %d logs", e.chainClient.Name(), len(logs))
 
-	events, err := e.parseLogs(logs)
-	if err != nil {
-		return fmt.Errorf("failed to parse logs: %w", err)
+	if err := e.processLogs(ctx, logs); err != nil {
+		e.logger.Errorf("[%s] [EventExtractor] Failed to process logs: %v", e.chainClient.Name(), err)
+		return fmt.Errorf("failed to process logs: %w", err)
 	}
 
-	if err := e.publishEvents(events); err != nil {
-		return fmt.Errorf("failed to publish events: %w", err)
-	}
+	e.logger.Debugf("[%s] [EventExtractor] Processed blocks range: %d - %d", e.chainClient.Name(), br.Start, br.End)
 
 	return nil
 }
@@ -107,45 +139,60 @@ func (ext *EventExtractor) publishEvents(events []Event) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal events: %w", err)
 	}
+
 	if _, err := ext.pub.PublishAsync(ext.TargetSubject(), bytes); err != nil {
 		return fmt.Errorf("failed to publish events: %w", err)
 	}
+
 	return nil
 }
 
 func (ext *EventExtractor) getTargetContracts() []common.Address {
+	ext.lock.RLock()
+	defer ext.lock.RUnlock()
+
 	contracts := make([]common.Address, 0, len(ext.contracts))
 	for c := range ext.contracts {
 		contracts = append(contracts, c)
 	}
+
 	return contracts
 }
 
 func (ext *EventExtractor) getTopics() []common.Hash {
+	ext.lock.RLock()
+	defer ext.lock.RUnlock()
+
 	topics := make([]common.Hash, 0, len(ext.events))
 	for hash := range ext.events {
 		topics = append(topics, hash)
 	}
+
 	return topics
 }
 
-func (ext *EventExtractor) parseLogs(logs []types.Log) ([]Event, error) {
+func (ext *EventExtractor) processLogs(ctx context.Context, logs []types.Log) error {
 	txs := make(map[common.Hash]*types.Receipt)
-	events := make([]Event, 0, len(logs))
+
 	for _, log := range logs {
+		ext.lock.RLock()
 		view, ok := ext.events[log.Topics[0]]
+		ext.lock.RUnlock()
+
 		if !ok {
 			continue
 		}
 
 		data := make(map[string]any)
 		if err := abidec.ParseLogIntoMap(view.Abi, data, &log); err != nil {
-			return nil, fmt.Errorf("failed to parse log: %w", err)
+			ext.logger.Errorf("[%s] [EventExtractor] Failed to parse log: %v", ext.chainClient.Name(), err)
+			continue
 		}
 
 		bytes, err := json.Marshal(data)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal data: %w", err)
+			ext.logger.Errorf("[%s] [EventExtractor] Failed to marshal data: %v", ext.chainClient.Name(), err)
+			continue
 		}
 
 		ev := Event{
@@ -165,19 +212,28 @@ func (ext *EventExtractor) parseLogs(logs []types.Log) ([]Event, error) {
 			Data: bytes,
 		}
 
-		if receipt, ok := txs[log.TxHash]; ok {
-			ev.MetaData.OtherLogs = receipt.Logs
-		} else {
-			receipt, err := ext.chainClient.TransactionReceipt(context.Background(), log.TxHash)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get transaction receipt: %w", err)
-			}
+		if view.NeedOtherLogs {
+			if receipt, ok := txs[log.TxHash]; ok {
+				ev.MetaData.OtherLogs = receipt.Logs
+			} else {
+				receipt, errReceipt := ext.chainClient.TransactionReceipt(ctx, log.TxHash)
+				if errReceipt != nil {
+					ext.logger.Errorf("[%s] [EventExtractor] Failed to get transaction receipt: %v", ext.chainClient.Name(), errReceipt)
+					continue
+				}
 
-			ev.MetaData.OtherLogs = receipt.Logs
-			txs[log.TxHash] = receipt
+				ev.MetaData.OtherLogs = receipt.Logs
+				txs[log.TxHash] = receipt
+			}
+		} else {
+			ev.MetaData.OtherLogs = make([]*types.Log, 0)
 		}
 
-		events = append(events, ev)
+		if err := ext.publishEvents([]Event{ev}); err != nil {
+			ext.logger.Errorf("[%s] [EventExtractor] Failed to publish event: %v", ext.chainClient.Name(), err)
+			continue
+		}
 	}
-	return events, nil
+
+	return nil
 }

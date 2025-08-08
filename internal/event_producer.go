@@ -46,7 +46,7 @@ func NewEventProducer(configs []EventConfig, pub jetstream.Publisher) *EventProd
 	}
 }
 
-func (p *EventProducer) HandleMsg(ctx context.Context, msg jetstream.Msg) error {
+func (p *EventProducer) HandleEvents(ctx context.Context, msg jetstream.Msg) error {
 	events := make([]Event, 0)
 
 	if err := json.Unmarshal(msg.Data(), &events); err != nil {

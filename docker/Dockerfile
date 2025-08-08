@@ -10,8 +10,8 @@ RUN go build -o /eventscale cmd/main.go
 FROM alpine:latest
 RUN apk add --update ca-certificates && mkdir -p /eventscale/conf
 
-COPY docker/config.yaml /eventscale/conf/config.yaml
-COPY docker/nats.conf /eventscale/conf/nats.conf
+# COPY docker/config.yaml /eventscale/conf/config.yaml
+# COPY docker/nats.conf /eventscale/conf/nats.conf
 
 COPY --from=builder /eventscale /bin/eventscale
 

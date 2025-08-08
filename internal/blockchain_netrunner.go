@@ -86,18 +86,46 @@ func InitNetRunner(ctx Context, conf NetRunnerConfig) (*NetRunner, error) {
 }
 
 func (n *NetRunner) Register(ctx Context) error {
+	blockConsName := "new-blocks-" + n.chainClient.Name()
 	blockCons, err := ctx.JetStream.CreateOrUpdateConsumer(ctx, STREAM_NAME, jetstream.ConsumerConfig{
-		Name:          "new-blocks-" + n.chainClient.Name(),
-		AckWait:       10 * time.Second,
+		Name:          blockConsName,
+		Durable:       blockConsName,
+		AckWait:       30 * time.Second,
 		AckPolicy:     jetstream.AckExplicitPolicy,
-		FilterSubject: NetwrokNewBlocksSubject(n.chainClient.Name()),
+		FilterSubject: NetworkNewBlocksSubject(n.chainClient.Name()),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create consumer new-blocks: %w", err)
 	}
 
-	if _, err := blockCons.Consume(messageHandlerWrapper(n.eventExtractor)); err != nil {
-		return fmt.Errorf("failed to consume new-blocks: %w", err)
+	if _, err := blockCons.Consume(
+		messageHandlerWrapper(n.eventExtractor.HandleBlocksRange),
+		jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
+			ctx.Logger.Errorf("[%s] Failed to consume new-blocks: %v", n.chainClient.Name(), err)
+		}),
+	); err != nil {
+		return fmt.Errorf("failed to register consumer for new-blocks: %w", err)
+	}
+
+	addEventConsName := "add-event-extractor-" + n.chainClient.Name()
+	addEventCons, err := ctx.JetStream.CreateOrUpdateConsumer(ctx, STREAM_NAME, jetstream.ConsumerConfig{
+		Name:          addEventConsName,
+		Durable:       addEventConsName,
+		AckWait:       10 * time.Second,
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		FilterSubject: NetworkAddEventExtractorSubject(n.chainClient.Name()),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create consumer for add-event-extractor: %w", err)
+	}
+
+	if _, err := addEventCons.Consume(
+		messageHandlerWrapper(n.eventExtractor.HandleAddEventExtractor),
+		jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
+			ctx.Logger.Errorf("[%s] Failed to consume add-event-extractor: %v", n.chainClient.Name(), err)
+		}),
+	); err != nil {
+		return fmt.Errorf("failed to register consumer for add-event-extractor: %w", err)
 	}
 
 	return nil
@@ -107,11 +135,13 @@ func (n *NetRunner) Start(ctx context.Context) error {
 	return n.blockListener.Listen(ctx)
 }
 
-func messageHandlerWrapper(handler JetStreamHandler) jetstream.MessageHandler {
+func messageHandlerWrapper(handler JetStreamHandlerFunc) jetstream.MessageHandler {
 	return func(msg jetstream.Msg) {
-		// TODO: use context with timeout < AckWait
-		if err := handler.HandleMsg(context.Background(), msg); err != nil {
-			msg.Nak()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := handler(ctx, msg); err != nil {
+			msg.Ack()
 			return
 		}
 		msg.Ack()

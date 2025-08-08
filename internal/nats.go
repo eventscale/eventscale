@@ -23,6 +23,8 @@ type JetStreamHandler interface {
 	HandleMsg(ctx context.Context, msg jetstream.Msg) error
 }
 
+type JetStreamHandlerFunc func(ctx context.Context, msg jetstream.Msg) error
+
 type NatsPublisher interface {
 	Publish(ctx context.Context, subj string, data []byte) error
 }

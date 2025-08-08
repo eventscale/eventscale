@@ -26,6 +26,7 @@ const ANY_TOKEN = "*"
 
 type Event struct {
 	internal.Event
+	Topic string
 }
 
 func (e Event) Decode(v any) error {
@@ -80,7 +81,7 @@ func Subscribe(ctx *Context, handler EventHandlerFunc, opts ...Opt) (*EventSubsc
 	}
 
 	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		AckWait:       10 * time.Second,
+		AckWait:       30 * time.Second,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		FilterSubject: sub.TartgetSubject(),
 	})
