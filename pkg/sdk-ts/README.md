@@ -1,15 +1,13 @@
-# Eventscale TypeScript SDK (sdk-ts)
+# Eventscale TypeScript SDK (@eventscale/sdk)
 
 TypeScript SDK mirroring `pkg/sdk-go` using NATS JetStream (`nats` package).
 
 ## Install
 
-From `pkg/sdk-ts/`:
+Install from npm:
 
-```
-npm install
-npm run build
-npm run examples:build
+```bash
+npm install @eventscale/sdk
 ```
 
 ## Usage
@@ -17,7 +15,7 @@ npm run examples:build
 ### Connect
 
 ```ts
-import { Context } from "./dist/nats.js";
+import { Context } from "@eventscale/sdk";
 
 const ctx = await Context.connect("nats://127.0.0.1:4222");
 ```
@@ -25,21 +23,31 @@ const ctx = await Context.connect("nats://127.0.0.1:4222");
 ### Subscribe to events
 
 ```ts
-import { subscribe } from "./dist/subscribe.js";
+import { subscribe } from "@eventscale/sdk";
 
-const sub = await subscribe(ctx, async (ev) => {
-  console.log(ev.meta);
-  const payload = ev.decodeJson<any>();
-  console.log(payload);
-}, { network: "*", contract: "*", event: "*" });
+type TransferEvent = {
+  from: string;
+  to: string;
+  value: bigint;
+};
 
-await sub.start(async () => {});
+const sub = await subscribe(
+  ctx,
+  async (ev) => {
+    const transfer = ev.data as TransferEvent; // parsed JSON payload
+    console.log("event meta:", ev.meta);
+    console.log("Transfer:", transfer);
+  },
+  { network: "*", contract: "*", event: "*" }
+);
+
+await sub.start();
 ```
 
 ### Add target event
 
 ```ts
-import { addTargetEventSync } from "./dist/targets.js";
+import { addTargetEventSync } from "@eventscale/sdk";
 
 await addTargetEventSync(ctx, {
   network: "ethereum",
@@ -55,9 +63,21 @@ await addTargetEventSync(ctx, {
 - `examples/subscribe.ts`
 - `examples/add_target_event.ts`
 
-Run after building examples:
+Build and run locally from `pkg/sdk-ts/`:
 
-```
+```bash
+npm install
+npm run build
+npm run examples:build
+
+# Subscribe (env vars are optional, shown with defaults)
 NATS_URL=nats://127.0.0.1:4222 \
+ES_NETWORK=ethereum \
+ES_CONTRACT=USDC \
+ES_EVENT=Transfer \
 node --enable-source-maps dist-examples/subscribe.js
+
+# Add target event
+NATS_URL=nats://127.0.0.1:4222 \
+node --enable-source-maps dist-examples/add_target_event.js
 ```

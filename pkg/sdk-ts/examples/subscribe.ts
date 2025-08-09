@@ -1,4 +1,4 @@
-import { Context, subscribe } from "@eventscale/sdk-ts";
+import { Context, subscribe } from "@eventscale/sdk";
 
 export interface TransferEvent {
   from: string;

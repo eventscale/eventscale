@@ -1,4 +1,4 @@
-import { Context, addTargetEventSync, addTargetEventAsync, TargetEvent } from "@eventscale/sdk-ts";
+import { Context, addTargetEventSync, addTargetEventAsync, TargetEvent } from "@eventscale/sdk";
 
 async function main() {
   const url = process.env.NATS_URL ?? "nats://127.0.0.1:4222";
