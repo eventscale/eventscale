@@ -1,6 +1,9 @@
 services:
   eventscale:
-    image: eventscale:0.1
+    image: eventscale:0.1.2
     command: ["-c", "/eventscale/conf/config.yaml"]
+    volumes:
+      - ./nats.conf:/eventscale/conf/nats.conf
+      - ./config.yaml:/eventscale/conf/config.yaml
     ports:
       - "4222:4222"

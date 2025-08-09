@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist-examples",
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@eventscale/sdk-ts": ["src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "examples/**/*.ts"],
+  "exclude": ["node_modules", "dist", "dist-examples"]
+}

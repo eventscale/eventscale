@@ -8,8 +8,7 @@ networks:
       per: 1s
       limit: 10
     blocks_proc:
-      start_from: 21292452
-      batch_limit: 1
+      batch_limit: 10
       interval: 5s
 events:
   - name: Transfer

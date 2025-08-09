@@ -1,2 +1,6 @@
 tmp/
 .DS_Store
+node_modules
+dist
+dist-examples
+package-lock.json
