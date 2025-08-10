@@ -13,11 +13,42 @@ import { STREAM_NAME, eventSubject } from "./subjects";
 
 export type EventHandlerFunc = (event: Event) => Promise<void> | void;
 
+export interface Logger {
+  debug?(message: string, ...args: any[]): void;
+  info?(message: string, ...args: any[]): void;
+  warn?(message: string, ...args: any[]): void;
+  error?(message: string, ...args: any[]): void;
+}
+
+// Default logger that does nothing (silent)
+const silentLogger: Logger = {};
+
+// Console logger for development
+export const consoleLogger: Logger = {
+  debug: console.debug?.bind(console) || console.log?.bind(console),
+  info: console.info?.bind(console) || console.log?.bind(console),
+  warn: console.warn?.bind(console) || console.log?.bind(console),
+  error: console.error?.bind(console) || console.log?.bind(console),
+};
+
+// Debug-enabled console logger (checks localStorage for debug flag)
+export const debugConsoleLogger: Logger = {
+  debug: (msg, ...args) => {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('eventscale:debug') === 'true') {
+      (console.debug || console.log)(`[Eventscale Debug] ${msg}`, ...args);
+    }
+  },
+  info: console.info?.bind(console) || console.log?.bind(console),
+  warn: console.warn?.bind(console) || console.log?.bind(console),
+  error: console.error?.bind(console) || console.log?.bind(console),
+};
+
 export interface SubscribeOptions {
   network?: string;
   contract?: string;
   event?: string;
   durableName?: string;
+  logger?: Logger;
 }
 
 export class EventSubscriber {
@@ -25,6 +56,7 @@ export class EventSubscriber {
   private consumer: Consumer;
   private stopped = false;
   private handler: EventHandlerFunc;
+  private logger: Logger;
 
   // target
   readonly network: string;
@@ -35,7 +67,8 @@ export class EventSubscriber {
     ctx: Context,
     consumer: Consumer,
     handler: EventHandlerFunc,
-    target: { network: string; contract: string; event: string }
+    target: { network: string; contract: string; event: string },
+    logger: Logger = silentLogger
   ) {
     this.ctx = ctx;
     this.consumer = consumer;
@@ -43,6 +76,7 @@ export class EventSubscriber {
     this.contract = target.contract;
     this.event = target.event;
     this.handler = handler;
+    this.logger = logger;
   }
 
   targetSubject(): string {
@@ -61,7 +95,7 @@ export class EventSubscriber {
               await this.handler(event);
               m.ack();
             } catch (err) {
-              console.log(`handler failed: ${err}`);
+              this.logger.error?.(`handler failed: ${err}`);
               m.nak();
             }
           } else {
@@ -106,19 +140,21 @@ export async function subscribe(
     network,
     contract,
     event,
-  });
+  }, opts.logger || silentLogger);
 }
 
 export class WebsocketContext {
   readonly nc: NatsConnection;
   readonly target: string;
   readonly handler: EventHandlerFunc;
+  private logger: Logger;
   stopped = false;
 
-  constructor(nc: NatsConnection, handler: EventHandlerFunc, target: string) {
+  constructor(nc: NatsConnection, handler: EventHandlerFunc, target: string, logger: Logger = silentLogger) {
     this.nc = nc;
     this.handler = handler;
     this.target = target;
+    this.logger = logger;
   }
 
   async start(): Promise<void> {
@@ -127,17 +163,28 @@ export class WebsocketContext {
 
       try {
         for await (const m of sub) {
-          const event = Event.fromJsonBytes(m.data, this.target);
+          this.logger.debug?.("received message", m.subject);
+
+          const eventWire = m.json<EventWire>();
+          // Browser-compatible base64 decoding
+          const data = typeof Buffer !== 'undefined' 
+            ? Buffer.from(eventWire.data, "base64").toString()
+            : atob(eventWire.data);
+          const event = new Event(eventWire.meta, JSON.parse(data), this.target);
+
           if (event) {
             try {
+              this.logger.debug?.("received event", event.topic);
               await this.handler(event);
             } catch (err) {
-              console.log(`handler failed: ${err}`);
+              this.logger.error?.(`handler failed: ${err}`);
             }
+          } else {
+            this.logger.debug?.("received non-event message");
           }
         }
       } catch (err) {
-        console.log(`consume failed: ${err}`);
+        this.logger.error?.(`consume failed: ${err}`);
       }
     }
   }
@@ -160,5 +207,7 @@ export async function websocketConnect(
   const filter = eventSubject(network, contract, event);
   const nc = await wsconnect({ servers: url });
 
-  return new WebsocketContext(nc, handler, filter);
+  opts.logger?.debug?.("websocket connected", filter);
+
+  return new WebsocketContext(nc, handler, filter, opts.logger || silentLogger);
 }

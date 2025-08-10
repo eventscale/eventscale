@@ -36,7 +36,10 @@ export class Event {
     try {
       const text = new TextDecoder().decode(bytes);
       const obj = JSON.parse(text) as EventWire;
-      const data = Buffer.from(obj.data, "base64").toString();
+      // Browser-compatible base64 decoding
+      const data = typeof Buffer !== 'undefined' 
+        ? Buffer.from(obj.data, "base64").toString()
+        : atob(obj.data);
       return new Event(obj.meta, JSON.parse(data), subject);
     } catch {
       return null;

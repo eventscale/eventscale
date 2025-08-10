@@ -49,8 +49,9 @@ func StartServer(ctx context.Context, confPath string) error {
 	}
 
 	_, err = js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:      STREAM_NAME,
-		Retention: jetstream.InterestPolicy,
+		Name:              STREAM_NAME,
+		Retention:         jetstream.LimitsPolicy,
+		MaxMsgsPerSubject: 1_000,
 		Subjects: []string{
 			STREAM_NAME + ".>",
 		},

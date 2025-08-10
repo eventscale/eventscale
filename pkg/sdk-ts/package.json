@@ -1,6 +1,6 @@
 {
   "name": "@eventscale/sdk",
-  "version": "0.1.3",
+  "version": "0.1.9",
   "description": "TypeScript SDK for Eventscale (JetStream/NATS)",
   "license": "Apache-2.0",
   "type": "module",
