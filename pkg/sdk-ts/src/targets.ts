@@ -1,5 +1,6 @@
 import { Context } from "./nats";
 import { networkAddEventExtractorSubject } from "./subjects";
+import { NatsConnection } from "@nats-io/nats-core";
 
 export interface TargetEvent {
   network: string; // not sent in payload, only used for subject
@@ -9,16 +10,20 @@ export interface TargetEvent {
   need_other_logs: boolean;
 }
 
-export async function addTargetEventSync(ctx: Context, event: TargetEvent): Promise<void> {
+export async function addTargetEvent(
+  ctx: Context,
+  event: TargetEvent
+): Promise<void> {
   const subject = networkAddEventExtractorSubject(event.network);
-  const { network, ...payload } = event;
-  const json = JSON.stringify(payload);
+  const json = JSON.stringify(event);
   await ctx.publish(subject, json);
 }
 
-export function addTargetEventAsync(ctx: Context, event: TargetEvent): Promise<void> {
+export function addTargetEventAsync(
+  nc: NatsConnection,
+  event: TargetEvent
+): void {
   const subject = networkAddEventExtractorSubject(event.network);
-  const { network, ...payload } = event;
-  const json = JSON.stringify(payload);
-  return ctx.publishAsync(subject, json);
+  const json = JSON.stringify(event);
+  nc.publish(subject, json);
 }

@@ -50,7 +50,7 @@ type EventMetadata struct {
 
 func (e *Event) TargetSubject(contractAlias ...string) string {
 	contract := e.MetaData.Contract.String()
-	if len(contractAlias) > 0 {
+	if len(contractAlias) > 0 && contractAlias[0] != "" {
 		contract = contractAlias[0]
 	}
 	return EventSubject(e.MetaData.Network, contract, e.MetaData.Name)
