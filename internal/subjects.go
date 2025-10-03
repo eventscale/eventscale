@@ -18,9 +18,11 @@ const (
 
 	SYSTEM_NEW_BLOCKS_SUBJECT                = "eventscale.system.new_blocks"
 	SYSTEM_EVENT_EXTRACTOR_SUBJECT           = "eventscale.system.event.extractor"
+	SYSTEM_BLOCKS_SUBJECT                    = "eventscale.system.blocks"
 	SYSTEM_EVENT_ADD_EVENT_EXTRACTOR_SUBJECT = "eventscale.system.add_event.extractor"
 
 	EVENTS_SUBJECT = "eventscale.events"
+	BLOCKS_SUBJECT = "eventscale.blocks"
 )
 
 func NetworkEventExtractorSubject(net string) string {
@@ -35,6 +37,14 @@ func NetworkAddEventExtractorSubject(net string) string {
 	return SYSTEM_EVENT_ADD_EVENT_EXTRACTOR_SUBJECT + "." + net
 }
 
+func NetworkBlocksSubject(net string) string {
+	return SYSTEM_BLOCKS_SUBJECT + "." + net
+}
+
 func EventSubject(net string, contract string, eventName string) string {
 	return EVENTS_SUBJECT + "." + net + "." + contract + "." + eventName
+}
+
+func BlocksSubject(net string, blockNumber string) string {
+	return BLOCKS_SUBJECT + "." + net + "." + blockNumber
 }

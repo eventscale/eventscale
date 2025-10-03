@@ -61,6 +61,7 @@ type NetRunner struct {
 	chainClient    *BlockchainClient
 	blockListener  *BlockListener
 	eventExtractor *EventExtractor
+	blockProducer  *BlockProducer
 }
 
 func InitNetRunner(ctx Context, conf NetRunnerConfig) (*NetRunner, error) {
@@ -77,11 +78,13 @@ func InitNetRunner(ctx Context, conf NetRunnerConfig) (*NetRunner, error) {
 	chainClient := NewBlockchainClient(conf.NetConf.Name, ethClient)
 	blockListener := NewBlockListener(conf.NetConf.BlocksProcessing, chainClient, ctx.Logger, ctx.JetStream)
 	eventExtractor := NewEventExtractor(chainClient, ctx.Logger, ctx.JetStream, targets)
+	blockProducer := NewBlockProducer(ctx.Logger, chainClient, ctx.JetStream, targets)
 
 	return &NetRunner{
 		chainClient:    chainClient,
 		blockListener:  blockListener,
 		eventExtractor: eventExtractor,
+		blockProducer:  blockProducer,
 	}, nil
 }
 
@@ -126,6 +129,27 @@ func (n *NetRunner) Register(ctx Context) error {
 		}),
 	); err != nil {
 		return fmt.Errorf("failed to register consumer for add-event-extractor: %w", err)
+	}
+
+	blockHeaderConsName := "blocks-" + n.chainClient.Name()
+	blockHeaderCons, err := ctx.JetStream.CreateOrUpdateConsumer(ctx, STREAM_NAME, jetstream.ConsumerConfig{
+		Name:          blockHeaderConsName,
+		Durable:       blockHeaderConsName,
+		AckWait:       30 * time.Second,
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		FilterSubject: NetworkBlocksSubject(n.chainClient.Name()),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create consumer for blocks: %w", err)
+	}
+
+	if _, err := blockHeaderCons.Consume(
+		messageHandlerWrapper(n.blockProducer.HandleBlocks),
+		jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
+			ctx.Logger.Errorf("[%s] Failed to consume blocks: %v", n.chainClient.Name(), err)
+		}),
+	); err != nil {
+		return fmt.Errorf("failed to register consumer for blocks: %w", err)
 	}
 
 	return nil

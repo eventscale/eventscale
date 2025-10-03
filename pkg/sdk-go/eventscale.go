@@ -47,23 +47,6 @@ func Connect(ctx context.Context, url string) (*Context, error) {
 	}, nil
 }
 
-func EventHandlerWrapper(handler EventHandlerFunc) jetstream.MessageHandler {
-	return func(msg jetstream.Msg) {
-		var event internal.Event
-		if err := json.Unmarshal(msg.Data(), &event); err != nil {
-			msg.Nak()
-			return
-		}
-
-		if err := handler(context.TODO(), Event{event, msg.Subject()}); err != nil {
-			msg.Nak()
-			return
-		}
-
-		msg.Ack()
-	}
-}
-
 type TargetEvent struct {
 	Network       string           `json:"-"`
 	Name          string           `json:"name"`

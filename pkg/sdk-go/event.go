@@ -1,16 +1,3 @@
-// Copyright 2024 The Eventscale Authors
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package eventscale
 
 import (
@@ -42,29 +29,37 @@ type EventSubscriber struct {
 
 	consumer jetstream.Consumer
 	ctx      jetstream.ConsumeContext
+
+	ackWait time.Duration
 }
 
-type Opt func(e *EventSubscriber)
+type EventOpt func(e *EventSubscriber)
 
-func WithNetwork(network string) Opt {
+func WithNetwork(network string) EventOpt {
 	return func(e *EventSubscriber) {
 		e.network = network
 	}
 }
 
-func WithContract(contract string) Opt {
+func WithContract(contract string) EventOpt {
 	return func(e *EventSubscriber) {
 		e.contract = contract
 	}
 }
 
-func WithEvent(event string) Opt {
+func WithEvent(event string) EventOpt {
 	return func(e *EventSubscriber) {
 		e.event = event
 	}
 }
 
-func Subscribe(ctx *Context, handler EventHandlerFunc, opts ...Opt) (*EventSubscriber, error) {
+func WithAckWait(ackWait time.Duration) EventOpt {
+	return func(e *EventSubscriber) {
+		e.ackWait = ackWait
+	}
+}
+
+func SubscribeEvent(ctx *Context, handler EventHandlerFunc, opts ...EventOpt) (*EventSubscriber, error) {
 	stream, err := ctx.JetStream.Stream(ctx, internal.STREAM_NAME)
 	if err != nil {
 		return nil, err
@@ -74,6 +69,7 @@ func Subscribe(ctx *Context, handler EventHandlerFunc, opts ...Opt) (*EventSubsc
 		network:  ANY_TOKEN,
 		contract: ANY_TOKEN,
 		event:    ANY_TOKEN,
+		ackWait:  30 * time.Second,
 	}
 
 	for _, opt := range opts {
@@ -81,7 +77,7 @@ func Subscribe(ctx *Context, handler EventHandlerFunc, opts ...Opt) (*EventSubsc
 	}
 
 	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		AckWait:       30 * time.Second,
+		AckWait:       sub.ackWait,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		FilterSubject: sub.TartgetSubject(),
 	})
@@ -111,4 +107,21 @@ func (e *EventSubscriber) Start(ctx context.Context) {
 
 func (e *EventSubscriber) TartgetSubject() string {
 	return internal.EventSubject(e.network, e.contract, e.event)
+}
+
+func EventHandlerWrapper(handler EventHandlerFunc) jetstream.MessageHandler {
+	return func(msg jetstream.Msg) {
+		var event internal.Event
+		if err := json.Unmarshal(msg.Data(), &event); err != nil {
+			msg.Nak()
+			return
+		}
+
+		if err := handler(context.TODO(), Event{event, msg.Subject()}); err != nil {
+			msg.Nak()
+			return
+		}
+
+		msg.Ack()
+	}
 }
