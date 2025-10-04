@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/lmittmann/w3/module/eth"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -108,17 +109,20 @@ func (e *EventExtractor) HandleBlocksRange(ctx context.Context, msg jetstream.Ms
 	var br BlocksRange
 	if err := json.Unmarshal(msg.Data(), &br); err != nil {
 		e.logger.Errorf("[%s] [EventExtractor] Failed to unmarshal blocks range: %v", e.chainClient.Name(), err)
+
 		return fmt.Errorf("failed to unmarshal blocks range: %w", err)
 	}
 
-	logs, err := e.chainClient.FilterLogs(ctx, ethereum.FilterQuery{
+	var logs []types.Log
+
+	if err := e.chainClient.CallCtx(ctx, eth.Logs(ethereum.FilterQuery{
 		FromBlock: big.NewInt(int64(br.Start)),
 		ToBlock:   big.NewInt(int64(br.End)),
 		Addresses: e.getTargetContracts(),
 		Topics:    [][]common.Hash{e.getTopics()},
-	})
-	if err != nil {
+	}).Returns(&logs)); err != nil {
 		e.logger.Errorf("[%s] [EventExtractor] Failed to get logs: %v", e.chainClient.Name(), err)
+
 		return fmt.Errorf("failed to get logs: %w", err)
 	}
 
@@ -126,6 +130,7 @@ func (e *EventExtractor) HandleBlocksRange(ctx context.Context, msg jetstream.Ms
 
 	if err := e.processLogs(ctx, logs); err != nil {
 		e.logger.Errorf("[%s] [EventExtractor] Failed to process logs: %v", e.chainClient.Name(), err)
+
 		return fmt.Errorf("failed to process logs: %w", err)
 	}
 
@@ -134,13 +139,13 @@ func (e *EventExtractor) HandleBlocksRange(ctx context.Context, msg jetstream.Ms
 	return nil
 }
 
-func (ext *EventExtractor) publishEvents(events []Event) error {
+func (ext *EventExtractor) publishEvents(ctx context.Context, events []Event) error {
 	bytes, err := json.Marshal(&events)
 	if err != nil {
 		return fmt.Errorf("failed to marshal events: %w", err)
 	}
 
-	if _, err := ext.pub.PublishAsync(ext.TargetSubject(), bytes); err != nil {
+	if _, err := ext.pub.Publish(ctx, ext.TargetSubject(), bytes); err != nil {
 		return fmt.Errorf("failed to publish events: %w", err)
 	}
 
@@ -216,11 +221,13 @@ func (ext *EventExtractor) processLogs(ctx context.Context, logs []types.Log) er
 			if receipt, ok := txs[log.TxHash]; ok {
 				ev.MetaData.OtherLogs = receipt.Logs
 			} else {
-				receipt, errReceipt := ext.chainClient.TransactionReceipt(ctx, log.TxHash)
-				if errReceipt != nil {
-					ext.logger.Errorf("[%s] [EventExtractor] Failed to get transaction receipt: %v", ext.chainClient.Name(), errReceipt)
+				var txReceipt *types.Receipt
+				if err := ext.chainClient.CallCtx(ctx, eth.TxReceipt(log.TxHash).Returns(&txReceipt)); err != nil {
+					ext.logger.Errorf("[%s] [EventExtractor] Failed to get transaction receipt: %v", ext.chainClient.Name(), err)
 					continue
 				}
+
+				receipt := txReceipt
 
 				ev.MetaData.OtherLogs = receipt.Logs
 				txs[log.TxHash] = receipt
@@ -229,7 +236,7 @@ func (ext *EventExtractor) processLogs(ctx context.Context, logs []types.Log) er
 			ev.MetaData.OtherLogs = make([]*types.Log, 0)
 		}
 
-		if err := ext.publishEvents([]Event{ev}); err != nil {
+		if err := ext.publishEvents(ctx, []Event{ev}); err != nil {
 			ext.logger.Errorf("[%s] [EventExtractor] Failed to publish event: %v", ext.chainClient.Name(), err)
 			continue
 		}

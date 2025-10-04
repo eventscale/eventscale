@@ -41,7 +41,7 @@ func main() {
 
 	fmt.Println("Connected to eventscale")
 
-	sub, err := eventscale.Subscribe(ectx, handleTransfers,
+	sub, err := eventscale.SubscribeEvent(ectx, handleTransfers,
 		eventscale.WithNetwork("ethereum"),
 		eventscale.WithContract("USDC"),
 		eventscale.WithEvent("Transfer"),

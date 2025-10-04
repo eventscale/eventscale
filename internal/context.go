@@ -23,6 +23,7 @@ import (
 type Context struct {
 	context.Context
 	jetstream.JetStream
+	stream jetstream.Stream
 	Logger server.Logger
 }
 

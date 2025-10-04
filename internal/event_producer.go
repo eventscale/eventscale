@@ -66,7 +66,7 @@ func (p *EventProducer) HandleEvents(ctx context.Context, msg jetstream.Msg) err
 
 		subject := event.TargetSubject(contractAlias...)
 
-		if _, err := p.pub.PublishAsync(subject, bytes); err != nil {
+		if _, err := p.pub.Publish(ctx, subject, bytes); err != nil {
 			return fmt.Errorf("failed to publish event: %w", err)
 		}
 	}

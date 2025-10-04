@@ -48,7 +48,7 @@ func StartServer(ctx context.Context, confPath string) error {
 		return fmt.Errorf("failed to create jetstream: %w", err)
 	}
 
-	_, err = js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+	stream, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:      STREAM_NAME,
 		Retention: jetstream.LimitsPolicy,
 		Discard:   jetstream.DiscardOld,
@@ -66,6 +66,7 @@ func StartServer(ctx context.Context, confPath string) error {
 	extCtx := Context{
 		Context:   ctx,
 		JetStream: js,
+		stream:    stream,
 		Logger:    commonLogger,
 	}
 

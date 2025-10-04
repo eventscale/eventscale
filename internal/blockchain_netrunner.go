@@ -20,8 +20,9 @@ import (
 
 	"github.com/avelex/abidec"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/lmittmann/w3"
 	"github.com/nats-io/nats.go/jetstream"
+	"golang.org/x/time/rate"
 )
 
 type NetRunnerConfig struct {
@@ -65,7 +66,15 @@ type NetRunner struct {
 }
 
 func InitNetRunner(ctx Context, conf NetRunnerConfig) (*NetRunner, error) {
-	ethClient, err := ethclient.Dial(conf.NetConf.RPC)
+	ethClient, err := w3.Dial(conf.NetConf.RPC,
+		w3.WithRateLimiter(
+			rate.NewLimiter(
+				rate.Every(conf.NetConf.RateLimit.Duration),
+				conf.NetConf.RateLimit.Limit, // burst
+			),
+			nil, // cost request
+		),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to %s: %w", conf.NetConf.Name, err)
 	}
@@ -89,34 +98,43 @@ func InitNetRunner(ctx Context, conf NetRunnerConfig) (*NetRunner, error) {
 }
 
 func (n *NetRunner) Register(ctx Context) error {
-	blockConsName := "new-blocks-" + n.chainClient.Name()
-	blockCons, err := ctx.JetStream.CreateOrUpdateConsumer(ctx, STREAM_NAME, jetstream.ConsumerConfig{
-		Name:          blockConsName,
-		Durable:       blockConsName,
-		AckWait:       30 * time.Second,
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		FilterSubject: NetworkNewBlocksSubject(n.chainClient.Name()),
+	newBlocksForEventCons, err := ctx.stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
+		InactiveThreshold: 30 * time.Second,
+		FilterSubjects:    []string{NetworkNewBlocksSubject(n.chainClient.Name())},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create consumer new-blocks: %w", err)
+		return fmt.Errorf("failed to create consumer new-blocks-for-event-extractor: %w", err)
 	}
 
-	if _, err := blockCons.Consume(
+	if _, err := newBlocksForEventCons.Consume(
 		messageHandlerWrapper(n.eventExtractor.HandleBlocksRange),
 		jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
-			ctx.Logger.Errorf("[%s] Failed to consume new-blocks: %v", n.chainClient.Name(), err)
+			ctx.Logger.Errorf("[%s] Failed to consume new-blocks-for-event-extractor: %v", n.chainClient.Name(), err)
 		}),
 	); err != nil {
-		return fmt.Errorf("failed to register consumer for new-blocks: %w", err)
+		return fmt.Errorf("failed to register consumer for new-blocks-for-event-extractor: %w", err)
 	}
 
-	addEventConsName := "add-event-extractor-" + n.chainClient.Name()
-	addEventCons, err := ctx.JetStream.CreateOrUpdateConsumer(ctx, STREAM_NAME, jetstream.ConsumerConfig{
-		Name:          addEventConsName,
-		Durable:       addEventConsName,
-		AckWait:       10 * time.Second,
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		FilterSubject: NetworkAddEventExtractorSubject(n.chainClient.Name()),
+	newBlocksForBlockCons, err := ctx.stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
+		InactiveThreshold: 30 * time.Second,
+		FilterSubjects:    []string{NetworkNewBlocksSubject(n.chainClient.Name())},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create consumer new-blocks-for-block-producer: %w", err)
+	}
+
+	if _, err := newBlocksForBlockCons.Consume(
+		messageHandlerWrapper(n.blockProducer.HandleBlocks),
+		jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
+			ctx.Logger.Errorf("[%s] Failed to consume new-blocks-for-block-producer: %v", n.chainClient.Name(), err)
+		}),
+	); err != nil {
+		return fmt.Errorf("failed to register consumer for new-blocks-for-block-producer: %w", err)
+	}
+
+	addEventCons, err := ctx.stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
+		InactiveThreshold: 30 * time.Second,
+		FilterSubjects:    []string{NetworkAddEventExtractorSubject(n.chainClient.Name())},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create consumer for add-event-extractor: %w", err)
@@ -129,27 +147,6 @@ func (n *NetRunner) Register(ctx Context) error {
 		}),
 	); err != nil {
 		return fmt.Errorf("failed to register consumer for add-event-extractor: %w", err)
-	}
-
-	blockHeaderConsName := "blocks-" + n.chainClient.Name()
-	blockHeaderCons, err := ctx.JetStream.CreateOrUpdateConsumer(ctx, STREAM_NAME, jetstream.ConsumerConfig{
-		Name:          blockHeaderConsName,
-		Durable:       blockHeaderConsName,
-		AckWait:       30 * time.Second,
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		FilterSubject: NetworkBlocksSubject(n.chainClient.Name()),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create consumer for blocks: %w", err)
-	}
-
-	if _, err := blockHeaderCons.Consume(
-		messageHandlerWrapper(n.blockProducer.HandleBlocks),
-		jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
-			ctx.Logger.Errorf("[%s] Failed to consume blocks: %v", n.chainClient.Name(), err)
-		}),
-	); err != nil {
-		return fmt.Errorf("failed to register consumer for blocks: %w", err)
 	}
 
 	return nil
@@ -165,7 +162,7 @@ func messageHandlerWrapper(handler JetStreamHandlerFunc) jetstream.MessageHandle
 		defer cancel()
 
 		if err := handler(ctx, msg); err != nil {
-			msg.Ack()
+			msg.Nak()
 			return
 		}
 		msg.Ack()

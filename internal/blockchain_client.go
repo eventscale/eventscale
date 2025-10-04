@@ -18,17 +18,19 @@ import (
 	"math/big"
 	"sync"
 
-	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/lmittmann/w3"
+	"github.com/lmittmann/w3/module/eth"
 )
 
 type BlockchainClient struct {
-	*ethclient.Client
+	*w3.Client
+
 	name    BlockchainName
 	once    *sync.Once
 	chainID *big.Int
 }
 
-func NewBlockchainClient(name BlockchainName, client *ethclient.Client) *BlockchainClient {
+func NewBlockchainClient(name BlockchainName, client *w3.Client) *BlockchainClient {
 	return &BlockchainClient{
 		Client:  client,
 		name:    name,
@@ -43,9 +45,19 @@ func (c *BlockchainClient) Name() string {
 
 func (c *BlockchainClient) ChainID() *big.Int {
 	c.once.Do(func() {
-		if chainID, err := c.Client.ChainID(context.Background()); err == nil {
-			c.chainID.Set(chainID)
+		var id uint64
+		if err := c.Client.Call(eth.ChainID().Returns(&id)); err == nil {
+			c.chainID = big.NewInt(int64(id))
 		}
 	})
 	return c.chainID
+}
+
+func (c *BlockchainClient) BlockNumber(ctx context.Context) (*big.Int, error) {
+	var num *big.Int
+	if err := c.Client.CallCtx(ctx, eth.BlockNumber().Returns(&num)); err != nil {
+		return nil, err
+	}
+
+	return num, nil
 }

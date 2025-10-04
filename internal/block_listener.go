@@ -28,6 +28,10 @@ type BlocksRange struct {
 	End   uint64 `json:"end"`
 }
 
+func (br BlocksRange) Len() uint64 {
+	return br.End - br.Start + 1
+}
+
 type BlockListener struct {
 	logger      server.Logger
 	cfg         BlocksProcessingConfig
@@ -59,7 +63,7 @@ func (l *BlockListener) Listen(ctx context.Context) error {
 			return fmt.Errorf("failed to get current block number: %w", err)
 		}
 
-		startedBlock = currentBlock
+		startedBlock = currentBlock.Uint64()
 	}
 
 	l.logger.Debugf("[%s] [BlockListener] Started from block: %d", l.chainClient.Name(), startedBlock)
@@ -100,7 +104,7 @@ func (l *BlockListener) processBlocks(ctx context.Context, startedBlock uint64) 
 	}
 
 	// Publish the new blocks range
-	if err := l.publishNewBlocks(blocksRange); err != nil {
+	if err := l.publishNewBlocks(ctx, blocksRange); err != nil {
 		return startedBlock, fmt.Errorf("failed to publish blocks range %d-%d: %w", blocksRange.Start, blocksRange.End, err)
 	}
 
@@ -116,7 +120,7 @@ func (l *BlockListener) getCurrentBlock(ctx context.Context) (uint64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to get current block number: %w", err)
 	}
-	return currentBlock, nil
+	return currentBlock.Uint64(), nil
 }
 
 // calculateBlockRange determines the range of blocks to process
@@ -140,13 +144,13 @@ func (l *BlockListener) calculateBlockRange(startedBlock, currentBlock uint64) (
 	}, true
 }
 
-func (l *BlockListener) publishNewBlocks(r BlocksRange) error {
+func (l *BlockListener) publishNewBlocks(ctx context.Context, r BlocksRange) error {
 	bytes, err := json.Marshal(&r)
 	if err != nil {
 		return fmt.Errorf("failed to marshal new blocks: %w", err)
 	}
 
-	_, err = l.pub.PublishAsync(l.TargetSubject(), bytes)
+	_, err = l.pub.Publish(ctx, l.TargetSubject(), bytes)
 	if err != nil {
 		return fmt.Errorf("failed to publish new blocks: %w", err)
 	}

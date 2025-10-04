@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/lmittmann/w3/module/eth"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -52,32 +53,34 @@ func (p *BlockProducer) HandleBlocks(ctx context.Context, msg jetstream.Msg) err
 	var br BlocksRange
 	if err := json.Unmarshal(msg.Data(), &br); err != nil {
 		p.logger.Errorf("[%s] [BlockProducer] Failed to unmarshal blocks range: %v", p.chainClient.Name(), err)
+
 		return fmt.Errorf("unmarshal blocks range: %w", err)
 	}
 
 	for blockNumber := br.Start; blockNumber <= br.End; blockNumber++ {
-		header, err := p.chainClient.HeaderByNumber(ctx, big.NewInt(int64(blockNumber)))
-		if err != nil {
-			p.logger.Errorf("[%s] [BlockProducer] Failed to get block: %v", p.chainClient.Name(), err)
-			return fmt.Errorf("get header: %w", err)
-		}
+		var (
+			header *types.Header
+			logs   []types.Log
+		)
 
-		logs, err := p.chainClient.FilterLogs(ctx, ethereum.FilterQuery{
-			FromBlock: big.NewInt(int64(blockNumber)),
-			ToBlock:   big.NewInt(int64(blockNumber)),
-			Addresses: p.getTargetContracts(),
-			Topics:    [][]common.Hash{p.getTopics()},
-		})
-		if err != nil {
-			p.logger.Errorf("[%s] [BlockProducer] Failed to get logs: %v", p.chainClient.Name(), err)
-			return fmt.Errorf("get logs: %w", err)
-		}
+		if err := p.chainClient.CallCtx(ctx,
+			eth.HeaderByNumber(big.NewInt(int64(blockNumber))).Returns(&header),
+			eth.Logs(ethereum.FilterQuery{
+				FromBlock: big.NewInt(int64(blockNumber)),
+				ToBlock:   big.NewInt(int64(blockNumber)),
+				Addresses: p.getTargetContracts(),
+				Topics:    [][]common.Hash{p.getTopics()},
+			}).Returns(&logs),
+		); err != nil {
+			p.logger.Errorf("[%s] [BlockProducer] Failed to call chain client: %v", p.chainClient.Name(), err)
 
-		p.logger.Tracef("[%s] [BlockProducer] Found %d logs", p.chainClient.Name(), len(logs))
+			return fmt.Errorf("chain client call: %w", err)
+		}
 
 		events, err := p.processLogs(ctx, header, logs)
 		if err != nil {
 			p.logger.Errorf("[%s] [BlockProducer] Failed to process logs: %v", p.chainClient.Name(), err)
+
 			return fmt.Errorf("process logs: %w", err)
 		}
 
@@ -85,14 +88,18 @@ func (p *BlockProducer) HandleBlocks(ctx context.Context, msg jetstream.Msg) err
 		payload, err := json.Marshal(blockEvent)
 		if err != nil {
 			p.logger.Errorf("[%s] [BlockProducer] Failed to marshal block event: %v", p.chainClient.Name(), err)
+
 			return fmt.Errorf("marshal block event: %w", err)
 		}
 
-		if _, err := p.pub.PublishAsync(blockEvent.TargetSubject(), payload); err != nil {
+		if _, err := p.pub.Publish(ctx, blockEvent.TargetSubject(), payload); err != nil {
 			p.logger.Errorf("[%s] [BlockProducer] Failed to publish block event: %v", p.chainClient.Name(), err)
+
 			return fmt.Errorf("publish block event: %w", err)
 		}
 	}
+
+	p.logger.Debugf("[%s] [BlockProducer] Processed blocks range: %d - %d", p.chainClient.Name(), br.Start, br.End)
 
 	return nil
 }
@@ -167,11 +174,13 @@ func (p *BlockProducer) processLogs(ctx context.Context, header *types.Header, l
 			if receipt, ok := txs[log.TxHash]; ok {
 				ev.MetaData.OtherLogs = receipt.Logs
 			} else {
-				receipt, errReceipt := p.chainClient.TransactionReceipt(ctx, log.TxHash)
-				if errReceipt != nil {
-					p.logger.Errorf("[%s] [BlockProducer] Failed to get transaction receipt: %v", p.chainClient.Name(), errReceipt)
+				var txReceipt *types.Receipt
+				if err := p.chainClient.CallCtx(ctx, eth.TxReceipt(log.TxHash).Returns(&txReceipt)); err != nil {
+					p.logger.Errorf("[%s] [BlockProducer] Failed to get transaction receipt: %v", p.chainClient.Name(), err)
 					continue
 				}
+
+				receipt := txReceipt
 
 				ev.MetaData.OtherLogs = receipt.Logs
 				txs[log.TxHash] = receipt
