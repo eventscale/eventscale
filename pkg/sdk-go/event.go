@@ -26,6 +26,7 @@ type EventSubscriber struct {
 	network  string
 	contract string
 	event    string
+	name     string
 
 	consumer jetstream.Consumer
 	ctx      jetstream.ConsumeContext
@@ -59,6 +60,12 @@ func WithAckWait(ackWait time.Duration) EventOpt {
 	}
 }
 
+func WithEventConsumerName(name string) EventOpt {
+	return func(e *EventSubscriber) {
+		e.name = name
+	}
+}
+
 func SubscribeEvent(ctx *Context, handler EventHandlerFunc, opts ...EventOpt) (*EventSubscriber, error) {
 	stream, err := ctx.JetStream.Stream(ctx, internal.STREAM_NAME)
 	if err != nil {
@@ -77,8 +84,10 @@ func SubscribeEvent(ctx *Context, handler EventHandlerFunc, opts ...EventOpt) (*
 	}
 
 	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+		Name:          sub.name,
 		AckWait:       sub.ackWait,
 		AckPolicy:     jetstream.AckExplicitPolicy,
+		DeliverPolicy: jetstream.DeliverLastPolicy,
 		FilterSubject: sub.TartgetSubject(),
 	})
 	if err != nil {

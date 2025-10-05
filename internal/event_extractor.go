@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"sync"
 	"time"
 
 	"github.com/avelex/abidec"
@@ -41,36 +40,18 @@ type TargetEvent struct {
 }
 
 type EventExtractor struct {
-	logger      server.Logger
-	chainClient *BlockchainClient
-	pub         jetstream.Publisher
-
-	lock      *sync.RWMutex
-	events    map[common.Hash]*TargetEvent
-	contracts map[common.Address]struct{}
+	logger       server.Logger
+	chainClient  *BlockchainClient
+	pub          jetstream.Publisher
+	logProcessor *LogProcessor
 }
 
-func NewEventExtractor(chainClient *BlockchainClient, log server.Logger, pub jetstream.Publisher, target []*TargetEvent) *EventExtractor {
-	uniqueContracts := make(map[common.Address]struct{})
-	for _, e := range target {
-		for _, c := range e.Contracts {
-			uniqueContracts[c] = struct{}{}
-		}
-	}
-
-	uniqueEvents := make(map[common.Hash]*TargetEvent)
-	for _, e := range target {
-		e.NeedOtherLogs = true
-		uniqueEvents[e.Abi.ID] = e
-	}
-
+func NewEventExtractor(chainClient *BlockchainClient, log server.Logger, pub jetstream.Publisher, logProcessor *LogProcessor) *EventExtractor {
 	return &EventExtractor{
-		logger:      log,
-		events:      uniqueEvents,
-		contracts:   uniqueContracts,
-		chainClient: chainClient,
-		pub:         pub,
-		lock:        &sync.RWMutex{},
+		logger:       log,
+		chainClient:  chainClient,
+		pub:          pub,
+		logProcessor: logProcessor,
 	}
 }
 
@@ -93,14 +74,9 @@ func (e *EventExtractor) HandleAddEventExtractor(ctx context.Context, msg jetstr
 	}
 
 	event.Abi = abiEv
+	event.NeedOtherLogs = true
 
-	e.lock.Lock()
-	for _, c := range event.Contracts {
-		e.contracts[c] = struct{}{}
-	}
-
-	e.events[event.Abi.ID] = &event
-	e.lock.Unlock()
+	e.logProcessor.AddEvent(&event)
 
 	return nil
 }
@@ -118,8 +94,8 @@ func (e *EventExtractor) HandleBlocksRange(ctx context.Context, msg jetstream.Ms
 	if err := e.chainClient.CallCtx(ctx, eth.Logs(ethereum.FilterQuery{
 		FromBlock: big.NewInt(int64(br.Start)),
 		ToBlock:   big.NewInt(int64(br.End)),
-		Addresses: e.getTargetContracts(),
-		Topics:    [][]common.Hash{e.getTopics()},
+		Addresses: e.logProcessor.GetTargetContracts(),
+		Topics:    [][]common.Hash{e.logProcessor.GetTopics()},
 	}).Returns(&logs)); err != nil {
 		e.logger.Errorf("[%s] [EventExtractor] Failed to get logs: %v", e.chainClient.Name(), err)
 
@@ -152,90 +128,13 @@ func (ext *EventExtractor) publishEvents(ctx context.Context, events []Event) er
 	return nil
 }
 
-func (ext *EventExtractor) getTargetContracts() []common.Address {
-	ext.lock.RLock()
-	defer ext.lock.RUnlock()
-
-	contracts := make([]common.Address, 0, len(ext.contracts))
-	for c := range ext.contracts {
-		contracts = append(contracts, c)
-	}
-
-	return contracts
-}
-
-func (ext *EventExtractor) getTopics() []common.Hash {
-	ext.lock.RLock()
-	defer ext.lock.RUnlock()
-
-	topics := make([]common.Hash, 0, len(ext.events))
-	for hash := range ext.events {
-		topics = append(topics, hash)
-	}
-
-	return topics
-}
-
 func (ext *EventExtractor) processLogs(ctx context.Context, logs []types.Log) error {
-	txs := make(map[common.Hash]*types.Receipt)
+	events, err := ext.logProcessor.ProcessLogsToEvents(ctx, logs, time.Now().Unix())
+	if err != nil {
+		return fmt.Errorf("failed to process logs: %w", err)
+	}
 
-	for _, log := range logs {
-		ext.lock.RLock()
-		view, ok := ext.events[log.Topics[0]]
-		ext.lock.RUnlock()
-
-		if !ok {
-			continue
-		}
-
-		data := make(map[string]any)
-		if err := abidec.ParseLogIntoMap(view.Abi, data, &log); err != nil {
-			ext.logger.Errorf("[%s] [EventExtractor] Failed to parse log: %v", ext.chainClient.Name(), err)
-			continue
-		}
-
-		bytes, err := json.Marshal(data)
-		if err != nil {
-			ext.logger.Errorf("[%s] [EventExtractor] Failed to marshal data: %v", ext.chainClient.Name(), err)
-			continue
-		}
-
-		ev := Event{
-			MetaData: EventMetadata{
-				Network:     ext.chainClient.Name(),
-				ChainID:     ext.chainClient.ChainID(),
-				Contract:    log.Address,
-				Name:        view.Name,
-				Signature:   view.Signature,
-				BlockNumber: log.BlockNumber,
-				BlockHash:   log.BlockHash,
-				TxHash:      log.TxHash,
-				TxIndex:     log.TxIndex,
-				LogIndex:    log.Index,
-				Timestamp:   time.Now().Unix(),
-			},
-			Data: bytes,
-		}
-
-		if view.NeedOtherLogs {
-			if receipt, ok := txs[log.TxHash]; ok {
-				ev.MetaData.OtherLogs = receipt.Logs
-			} else {
-				var txReceipt *types.Receipt
-				if err := ext.chainClient.CallCtx(ctx, eth.TxReceipt(log.TxHash).Returns(&txReceipt)); err != nil {
-					ext.logger.Errorf("[%s] [EventExtractor] Failed to get transaction receipt: %v", ext.chainClient.Name(), err)
-					continue
-				}
-
-				receipt := txReceipt
-
-				ev.MetaData.OtherLogs = receipt.Logs
-				txs[log.TxHash] = receipt
-			}
-		} else {
-			ev.MetaData.OtherLogs = make([]*types.Log, 0)
-		}
-
+	for _, ev := range events {
 		if err := ext.publishEvents(ctx, []Event{ev}); err != nil {
 			ext.logger.Errorf("[%s] [EventExtractor] Failed to publish event: %v", ext.chainClient.Name(), err)
 			continue

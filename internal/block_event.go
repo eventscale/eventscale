@@ -10,15 +10,13 @@ type BlockEvent struct {
 	Network string        `json:"network"`
 	ChainID *big.Int      `json:"chain_id"`
 	Header  *types.Header `json:"header"`
-	Events  []Event       `json:"events"`
 }
 
-func NewBlockEvent(network string, chainID *big.Int, header *types.Header, events []Event) *BlockEvent {
+func NewBlockEvent(network string, chainID *big.Int, header *types.Header) *BlockEvent {
 	return &BlockEvent{
 		Network: network,
 		ChainID: chainID,
 		Header:  header,
-		Events:  events,
 	}
 }
 

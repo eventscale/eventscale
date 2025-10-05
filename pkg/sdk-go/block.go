@@ -31,8 +31,8 @@ type Block struct {
 type BlockHandlerFunc func(ctx context.Context, block Block) error
 
 type BlockSubscriber struct {
-	network string
-
+	network  string
+	name     string
 	consumer jetstream.Consumer
 	ctx      jetstream.ConsumeContext
 
@@ -50,6 +50,12 @@ func WithBlockNetwork(network string) BlockOpt {
 func WithBlockAckWait(ackWait time.Duration) BlockOpt {
 	return func(e *BlockSubscriber) {
 		e.ackWait = ackWait
+	}
+}
+
+func WithBlockConsumerName(name string) BlockOpt {
+	return func(e *BlockSubscriber) {
+		e.name = name
 	}
 }
 
@@ -71,6 +77,7 @@ func SubscribeBlock(ctx *Context, handler BlockHandlerFunc, opts ...BlockOpt) (*
 	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		AckWait:       sub.ackWait,
 		AckPolicy:     jetstream.AckExplicitPolicy,
+		DeliverPolicy: jetstream.DeliverLastPolicy,
 		FilterSubject: sub.TartgetSubject(),
 	})
 	if err != nil {

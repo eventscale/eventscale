@@ -16,7 +16,9 @@ package internal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -32,19 +34,27 @@ func (br BlocksRange) Len() uint64 {
 	return br.End - br.Start + 1
 }
 
+type BlocksSubscriber interface {
+	HandleBlocksRange(ctx context.Context, br BlocksRange) error
+}
+
 type BlockListener struct {
 	logger      server.Logger
 	cfg         BlocksProcessingConfig
 	chainClient *BlockchainClient
 	pub         jetstream.Publisher
+	kv          jetstream.KeyValue
+	subscribers []BlocksSubscriber
 }
 
-func NewBlockListener(cfg BlocksProcessingConfig, chainClient *BlockchainClient, log server.Logger, pub jetstream.Publisher) *BlockListener {
+func NewBlockListener(cfg BlocksProcessingConfig, chainClient *BlockchainClient, log server.Logger, pub jetstream.Publisher, kv jetstream.KeyValue, subs []BlocksSubscriber) *BlockListener {
 	return &BlockListener{
 		logger:      log,
 		cfg:         cfg,
 		chainClient: chainClient,
 		pub:         pub,
+		kv:          kv,
+		subscribers: subs,
 	}
 }
 
@@ -56,14 +66,9 @@ func (l *BlockListener) Listen(ctx context.Context) error {
 	ticker := time.NewTicker(l.cfg.Interval)
 	defer ticker.Stop()
 
-	startedBlock := l.cfg.StartFrom
-	if l.cfg.StartFrom == 0 {
-		currentBlock, err := l.chainClient.BlockNumber(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get current block number: %w", err)
-		}
-
-		startedBlock = currentBlock.Uint64()
+	startedBlock, err := l.getStartedBlock(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get started block: %w", err)
 	}
 
 	l.logger.Debugf("[%s] [BlockListener] Started from block: %d", l.chainClient.Name(), startedBlock)
@@ -73,12 +78,20 @@ func (l *BlockListener) Listen(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			newStartedBlock, err := l.processBlocks(ctx, startedBlock)
+			processedBlock, err := l.processBlocks(ctx, startedBlock)
 			if err != nil {
 				l.logger.Errorf("[%s] [BlockListener] Failed to process blocks: %v", l.chainClient.Name(), err)
+
 				continue
 			}
-			startedBlock = newStartedBlock
+
+			if _, err := l.kv.Put(ctx, fmt.Sprintf("%s-last-processed-block", l.chainClient.Name()), []byte(fmt.Sprintf("%d", processedBlock))); err != nil {
+				l.logger.Errorf("[%s] [BlockListener] Failed to save last processed block: %v", l.chainClient.Name(), err)
+
+				continue
+			}
+
+			startedBlock = processedBlock + 1
 		}
 	}
 }
@@ -93,6 +106,7 @@ func (l *BlockListener) processBlocks(ctx context.Context, startedBlock uint64) 
 	// Skip processing if started block is higher than current block
 	if startedBlock > currentBlock {
 		l.logger.Tracef("[%s] [BlockListener] Started block %d is ahead of current block %d, skipping", l.chainClient.Name(), startedBlock, currentBlock)
+
 		return startedBlock, nil
 	}
 
@@ -100,18 +114,53 @@ func (l *BlockListener) processBlocks(ctx context.Context, startedBlock uint64) 
 	blocksRange, hasNewBlocks := l.calculateBlockRange(startedBlock, currentBlock)
 	if !hasNewBlocks {
 		l.logger.Debugf("[%s] [BlockListener] No new blocks to process", l.chainClient.Name())
+
 		return startedBlock, nil
 	}
 
 	// Publish the new blocks range
 	if err := l.publishNewBlocks(ctx, blocksRange); err != nil {
+		l.logger.Errorf("[%s] [BlockListener] Failed to publish blocks range %d-%d: %v", l.chainClient.Name(), blocksRange.Start, blocksRange.End, err)
+
 		return startedBlock, fmt.Errorf("failed to publish blocks range %d-%d: %w", blocksRange.Start, blocksRange.End, err)
 	}
 
 	l.logger.Debugf("[%s] [BlockListener] Published new blocks range: %d - %d", l.chainClient.Name(), blocksRange.Start, blocksRange.End)
 
 	// Return the next starting block
-	return blocksRange.End + 1, nil
+	return blocksRange.End, nil
+}
+
+func (l *BlockListener) getStartedBlock(ctx context.Context) (uint64, error) {
+	saved, err := l.kv.Get(ctx, fmt.Sprintf("%s-last-processed-block", l.chainClient.Name()))
+	if err != nil {
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			if l.cfg.StartFrom == 0 {
+				currentBlock, err := l.chainClient.BlockNumber(ctx)
+				if err != nil {
+					return 0, fmt.Errorf("failed to get current block number: %w", err)
+				}
+
+				return currentBlock.Uint64(), nil
+			}
+
+			return l.cfg.StartFrom, nil
+		}
+
+		return 0, fmt.Errorf("failed to get started block: %w", err)
+	}
+
+	var startedBlockStr string
+	if err := json.Unmarshal(saved.Value(), &startedBlockStr); err != nil {
+		return 0, fmt.Errorf("failed to unmarshal started block: %w", err)
+	}
+
+	savedBlock, err := strconv.ParseUint(startedBlockStr, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse started block: %w", err)
+	}
+
+	return savedBlock + 1, nil
 }
 
 // getCurrentBlock fetches the current block number from the blockchain
@@ -145,6 +194,12 @@ func (l *BlockListener) calculateBlockRange(startedBlock, currentBlock uint64) (
 }
 
 func (l *BlockListener) publishNewBlocks(ctx context.Context, r BlocksRange) error {
+	for _, s := range l.subscribers {
+		if err := s.HandleBlocksRange(ctx, r); err != nil {
+			return fmt.Errorf("failed to handle blocks range: %w", err)
+		}
+	}
+
 	bytes, err := json.Marshal(&r)
 	if err != nil {
 		return fmt.Errorf("failed to marshal new blocks: %w", err)

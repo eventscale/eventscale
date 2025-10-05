@@ -25,7 +25,7 @@ import (
 type BlockchainName string
 
 type Config struct {
-	Version  int             `yaml:"verison"`
+	Version  int             `yaml:"version"`
 	NATS     NATSConfig      `yaml:"nats"`
 	Events   []EventConfig   `yaml:"events"`
 	Networks []NetworkConfig `yaml:"networks"`
@@ -45,8 +45,8 @@ type NetworkConfig struct {
 	Name      BlockchainName `yaml:"name"`
 	RPC       string         `yaml:"rpc"`
 	RateLimit struct {
-		Duration time.Duration `yaml:"duration"`
-		Limit    int           `yaml:"limit"`
+		Per   time.Duration `yaml:"per"`
+		Limit int           `yaml:"limit"`
 	} `yaml:"rate_limit"`
 	BlocksProcessing BlocksProcessingConfig `yaml:"blocks_proc"`
 }
@@ -69,5 +69,62 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
+	if err := cfg.Validate(); err != nil {
+		return Config{}, fmt.Errorf("invalid config: %w", err)
+	}
+
 	return cfg, nil
+}
+
+func (c *Config) Validate() error {
+	if c.Version == 0 {
+		return fmt.Errorf("config version is required")
+	}
+
+	if c.NATS.Path == "" {
+		return fmt.Errorf("NATS config path is required")
+	}
+
+	if len(c.Networks) == 0 {
+		return fmt.Errorf("at least one network is required")
+	}
+
+	for i, net := range c.Networks {
+		if net.Name == "" {
+			return fmt.Errorf("network[%d]: name is required", i)
+		}
+		if net.RPC == "" {
+			return fmt.Errorf("network %s: RPC URL is required", net.Name)
+		}
+		if net.RateLimit.Limit <= 0 {
+			return fmt.Errorf("network %s: rate_limit.limit must be > 0", net.Name)
+		}
+		if net.RateLimit.Per <= 0 {
+			return fmt.Errorf("network %s: rate_limit.per must be > 0", net.Name)
+		}
+		if net.BlocksProcessing.BatchLimit == 0 {
+			return fmt.Errorf("network %s: blocks_proc.batch_limit must be > 0", net.Name)
+		}
+		if net.BlocksProcessing.Interval <= 0 {
+			return fmt.Errorf("network %s: blocks_proc.interval must be > 0", net.Name)
+		}
+	}
+
+	if len(c.Events) == 0 {
+		return fmt.Errorf("at least one event is required")
+	}
+
+	for i, event := range c.Events {
+		if event.Name == "" {
+			return fmt.Errorf("event[%d]: name is required", i)
+		}
+		if event.Signature == "" {
+			return fmt.Errorf("event %s: signature is required", event.Name)
+		}
+		if len(event.Networks) == 0 {
+			return fmt.Errorf("event %s: at least one network is required", event.Name)
+		}
+	}
+
+	return nil
 }

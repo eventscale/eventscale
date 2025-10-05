@@ -62,14 +62,14 @@ type NetRunner struct {
 	chainClient    *BlockchainClient
 	blockListener  *BlockListener
 	eventExtractor *EventExtractor
-	blockProducer  *BlockProducer
+	blockExtractor *BlockExtractor
 }
 
-func InitNetRunner(ctx Context, conf NetRunnerConfig) (*NetRunner, error) {
+func InitNetRunner(ctx Context, kv jetstream.KeyValue, conf NetRunnerConfig) (*NetRunner, error) {
 	ethClient, err := w3.Dial(conf.NetConf.RPC,
 		w3.WithRateLimiter(
 			rate.NewLimiter(
-				rate.Every(conf.NetConf.RateLimit.Duration),
+				rate.Every(conf.NetConf.RateLimit.Per),
 				conf.NetConf.RateLimit.Limit, // burst
 			),
 			nil, // cost request
@@ -85,20 +85,22 @@ func InitNetRunner(ctx Context, conf NetRunnerConfig) (*NetRunner, error) {
 	}
 
 	chainClient := NewBlockchainClient(conf.NetConf.Name, ethClient)
-	blockListener := NewBlockListener(conf.NetConf.BlocksProcessing, chainClient, ctx.Logger, ctx.JetStream)
-	eventExtractor := NewEventExtractor(chainClient, ctx.Logger, ctx.JetStream, targets)
-	blockProducer := NewBlockProducer(ctx.Logger, chainClient, ctx.JetStream, targets)
+
+	logProc := NewLogProcessor(ctx.Logger, chainClient, targets)
+	eventExtractor := NewEventExtractor(chainClient, ctx.Logger, ctx.JetStream, logProc)
+	blockExtractor := NewBlockExtractor(ctx.Logger, chainClient, ctx.JetStream, logProc)
+	blockListener := NewBlockListener(conf.NetConf.BlocksProcessing, chainClient, ctx.Logger, ctx.JetStream, kv, []BlocksSubscriber{})
 
 	return &NetRunner{
 		chainClient:    chainClient,
 		blockListener:  blockListener,
 		eventExtractor: eventExtractor,
-		blockProducer:  blockProducer,
+		blockExtractor: blockExtractor,
 	}, nil
 }
 
 func (n *NetRunner) Register(ctx Context) error {
-	newBlocksForEventCons, err := ctx.stream.CreateOrUpdatePushConsumer(ctx, jetstream.ConsumerConfig{
+	newBlocksForEventCons, err := ctx.stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Name:           "new-blocks-for-event-extractor-" + n.chainClient.Name(),
 		Durable:        "new-blocks-for-event-extractor-" + n.chainClient.Name(),
 		DeliverPolicy:  jetstream.DeliverLastPerSubjectPolicy,
@@ -108,7 +110,7 @@ func (n *NetRunner) Register(ctx Context) error {
 		FilterSubjects: []string{NetworkNewBlocksSubject(n.chainClient.Name())},
 	})
 	if err != nil {
-		return fmt.Errorf("create push consumer new-blocks-for-event-extractor: %w", err)
+		return fmt.Errorf("create pull consumer new-blocks-for-event-extractor: %w", err)
 	}
 
 	if _, err := newBlocksForEventCons.Consume(
@@ -120,7 +122,7 @@ func (n *NetRunner) Register(ctx Context) error {
 		return fmt.Errorf("register consumer for new-blocks-for-event-extractor: %w", err)
 	}
 
-	newBlocksForBlockCons, err := ctx.stream.CreateOrUpdatePushConsumer(ctx, jetstream.ConsumerConfig{
+	newBlocksForBlockCons, err := ctx.stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Name:           "new-blocks-for-block-producer-" + n.chainClient.Name(),
 		Durable:        "new-blocks-for-block-producer-" + n.chainClient.Name(),
 		DeliverPolicy:  jetstream.DeliverLastPerSubjectPolicy,
@@ -130,11 +132,11 @@ func (n *NetRunner) Register(ctx Context) error {
 		FilterSubjects: []string{NetworkNewBlocksSubject(n.chainClient.Name())},
 	})
 	if err != nil {
-		return fmt.Errorf("create push consumer new-blocks-for-block-producer: %w", err)
+		return fmt.Errorf("create pull consumer new-blocks-for-block-producer: %w", err)
 	}
 
 	if _, err := newBlocksForBlockCons.Consume(
-		messageHandlerWrapper(n.blockProducer.HandleBlocks),
+		messageHandlerWrapper(n.blockExtractor.HandleBlocks),
 		jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
 			ctx.Logger.Errorf("[%s] Failed to consume new-blocks-for-block-producer: %v", n.chainClient.Name(), err)
 		}),
@@ -142,7 +144,7 @@ func (n *NetRunner) Register(ctx Context) error {
 		return fmt.Errorf("register consumer for new-blocks-for-block-producer: %w", err)
 	}
 
-	addEventCons, err := ctx.stream.CreateOrUpdatePushConsumer(ctx, jetstream.ConsumerConfig{
+	addEventCons, err := ctx.stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Name:           "add-event-extractor-" + n.chainClient.Name(),
 		Durable:        "add-event-extractor-" + n.chainClient.Name(),
 		DeliverPolicy:  jetstream.DeliverLastPerSubjectPolicy,
@@ -171,9 +173,16 @@ func (n *NetRunner) Start(ctx context.Context) error {
 	return n.blockListener.Listen(ctx)
 }
 
+// Stop gracefully stops the NetRunner and all its components
+func (n *NetRunner) Stop() {
+	if n.blockExtractor != nil {
+		n.blockExtractor.Stop()
+	}
+}
+
 func messageHandlerWrapper(handler JetStreamHandlerFunc) jetstream.MessageHandler {
 	return func(msg jetstream.Msg) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), MessageHandlerTimeout)
 		defer cancel()
 
 		if err := handler(ctx, msg); err != nil {

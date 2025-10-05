@@ -52,7 +52,7 @@ func StartServer(ctx context.Context, confPath string) error {
 		Name:      STREAM_NAME,
 		Retention: jetstream.LimitsPolicy,
 		Discard:   jetstream.DiscardOld,
-		MaxAge:    5 * time.Minute,
+		MaxAge:    DefaultStreamMaxAge,
 		Subjects: []string{
 			STREAM_NAME + ".>",
 		},
@@ -70,9 +70,16 @@ func StartServer(ctx context.Context, confPath string) error {
 		Logger:    commonLogger,
 	}
 
+	kv, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket: "eventscale-system-bucket",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create key-value store: %w", err)
+	}
+
 	runners := make([]*NetRunner, 0, len(cfg.Networks))
 	for _, net := range cfg.Networks {
-		runner, err := InitNetRunner(extCtx, NetRunnerConfig{
+		runner, err := InitNetRunner(extCtx, kv, NetRunnerConfig{
 			NetConf: net,
 			Events:  cfg.Events,
 		})
@@ -93,7 +100,7 @@ func StartServer(ctx context.Context, confPath string) error {
 
 	extCons, err := js.CreateOrUpdateConsumer(ctx, STREAM_NAME, jetstream.ConsumerConfig{
 		Name:          "event-extractor",
-		AckWait:       10 * time.Second,
+		AckWait:       DefaultConsumerAckWait,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		FilterSubject: SYSTEM_EVENT_EXTRACTOR_SUBJECT + ".*",
 	})
@@ -110,20 +117,59 @@ func StartServer(ctx context.Context, confPath string) error {
 	wg := sync.WaitGroup{}
 	wg.Add(len(runners))
 
+	// Channel to collect errors from runners
+	errCh := make(chan error, len(runners))
+
 	for _, r := range runners {
 		go func(netr *NetRunner) {
 			defer wg.Done()
 			commonLogger.Noticef("Starting netrunner [%s]", netr.chainClient.Name())
 			if err := netr.Start(ctx); err != nil {
 				commonLogger.Errorf("Failed to start netrunner [%s]: %v", netr.chainClient.Name(), err)
+				errCh <- fmt.Errorf("netrunner %s failed: %w", netr.chainClient.Name(), err)
 			}
 		}(r)
 	}
 
 	commonLogger.Noticef("Eventscale is ready")
 
+	// Wait for shutdown signal or error
+	shutdownCh := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(shutdownCh)
+	}()
+
+	select {
+	case <-ctx.Done():
+		commonLogger.Noticef("Shutdown signal received, stopping gracefully...")
+		// Stop all runners
+		for _, r := range runners {
+			r.Stop()
+		}
+		// Wait for all runners to finish with timeout
+		shutdownTimeout := time.NewTimer(DefaultShutdownTimeout)
+		select {
+		case <-shutdownCh:
+			commonLogger.Noticef("All runners stopped gracefully")
+		case <-shutdownTimeout.C:
+			commonLogger.Warnf("Shutdown timeout exceeded, forcing exit")
+		}
+		shutdownTimeout.Stop()
+	case err := <-errCh:
+		commonLogger.Errorf("Runner error: %v", err)
+		// Stop all runners on error
+		for _, r := range runners {
+			r.Stop()
+		}
+		return err
+	case <-shutdownCh:
+		commonLogger.Noticef("All runners completed")
+	}
+
+	// Shutdown NATS server
+	natsServer.Shutdown()
 	natsServer.WaitForShutdown()
-	wg.Wait()
 
 	return nil
 }
