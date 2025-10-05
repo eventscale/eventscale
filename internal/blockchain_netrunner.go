@@ -98,12 +98,17 @@ func InitNetRunner(ctx Context, conf NetRunnerConfig) (*NetRunner, error) {
 }
 
 func (n *NetRunner) Register(ctx Context) error {
-	newBlocksForEventCons, err := ctx.stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
-		InactiveThreshold: 30 * time.Second,
-		FilterSubjects:    []string{NetworkNewBlocksSubject(n.chainClient.Name())},
+	newBlocksForEventCons, err := ctx.stream.CreateOrUpdatePushConsumer(ctx, jetstream.ConsumerConfig{
+		Name:           "new-blocks-for-event-extractor-" + n.chainClient.Name(),
+		Durable:        "new-blocks-for-event-extractor-" + n.chainClient.Name(),
+		DeliverPolicy:  jetstream.DeliverLastPerSubjectPolicy,
+		ReplayPolicy:   jetstream.ReplayInstantPolicy,
+		AckPolicy:      jetstream.AckExplicitPolicy,
+		AckWait:        5 * time.Minute,
+		FilterSubjects: []string{NetworkNewBlocksSubject(n.chainClient.Name())},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create consumer new-blocks-for-event-extractor: %w", err)
+		return fmt.Errorf("create push consumer new-blocks-for-event-extractor: %w", err)
 	}
 
 	if _, err := newBlocksForEventCons.Consume(
@@ -112,15 +117,20 @@ func (n *NetRunner) Register(ctx Context) error {
 			ctx.Logger.Errorf("[%s] Failed to consume new-blocks-for-event-extractor: %v", n.chainClient.Name(), err)
 		}),
 	); err != nil {
-		return fmt.Errorf("failed to register consumer for new-blocks-for-event-extractor: %w", err)
+		return fmt.Errorf("register consumer for new-blocks-for-event-extractor: %w", err)
 	}
 
-	newBlocksForBlockCons, err := ctx.stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
-		InactiveThreshold: 30 * time.Second,
-		FilterSubjects:    []string{NetworkNewBlocksSubject(n.chainClient.Name())},
+	newBlocksForBlockCons, err := ctx.stream.CreateOrUpdatePushConsumer(ctx, jetstream.ConsumerConfig{
+		Name:           "new-blocks-for-block-producer-" + n.chainClient.Name(),
+		Durable:        "new-blocks-for-block-producer-" + n.chainClient.Name(),
+		DeliverPolicy:  jetstream.DeliverLastPerSubjectPolicy,
+		ReplayPolicy:   jetstream.ReplayInstantPolicy,
+		AckPolicy:      jetstream.AckExplicitPolicy,
+		AckWait:        5 * time.Minute,
+		FilterSubjects: []string{NetworkNewBlocksSubject(n.chainClient.Name())},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create consumer new-blocks-for-block-producer: %w", err)
+		return fmt.Errorf("create push consumer new-blocks-for-block-producer: %w", err)
 	}
 
 	if _, err := newBlocksForBlockCons.Consume(
@@ -129,15 +139,20 @@ func (n *NetRunner) Register(ctx Context) error {
 			ctx.Logger.Errorf("[%s] Failed to consume new-blocks-for-block-producer: %v", n.chainClient.Name(), err)
 		}),
 	); err != nil {
-		return fmt.Errorf("failed to register consumer for new-blocks-for-block-producer: %w", err)
+		return fmt.Errorf("register consumer for new-blocks-for-block-producer: %w", err)
 	}
 
-	addEventCons, err := ctx.stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
-		InactiveThreshold: 30 * time.Second,
-		FilterSubjects:    []string{NetworkAddEventExtractorSubject(n.chainClient.Name())},
+	addEventCons, err := ctx.stream.CreateOrUpdatePushConsumer(ctx, jetstream.ConsumerConfig{
+		Name:           "add-event-extractor-" + n.chainClient.Name(),
+		Durable:        "add-event-extractor-" + n.chainClient.Name(),
+		DeliverPolicy:  jetstream.DeliverLastPerSubjectPolicy,
+		ReplayPolicy:   jetstream.ReplayInstantPolicy,
+		AckPolicy:      jetstream.AckExplicitPolicy,
+		AckWait:        1 * time.Minute,
+		FilterSubjects: []string{NetworkAddEventExtractorSubject(n.chainClient.Name())},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create consumer for add-event-extractor: %w", err)
+		return fmt.Errorf("create push consumer add-event-extractor: %w", err)
 	}
 
 	if _, err := addEventCons.Consume(
@@ -146,7 +161,7 @@ func (n *NetRunner) Register(ctx Context) error {
 			ctx.Logger.Errorf("[%s] Failed to consume add-event-extractor: %v", n.chainClient.Name(), err)
 		}),
 	); err != nil {
-		return fmt.Errorf("failed to register consumer for add-event-extractor: %w", err)
+		return fmt.Errorf("register consumer for add-event-extractor: %w", err)
 	}
 
 	return nil
