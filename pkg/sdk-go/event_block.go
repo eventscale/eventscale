@@ -95,7 +95,7 @@ func (e *EventBlockSubscriber) Start(ctx context.Context) {
 }
 
 func (e *EventBlockSubscriber) TartgetSubject() string {
-	return subjects.EventsBlocks(e.network, e.name)
+	return subjects.EventsBlocks(e.network, ANY_TOKEN)
 }
 
 func EventBlockHandlerWrapper(handler EventBlockHandlerFunc) jetstream.MessageHandler {
