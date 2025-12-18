@@ -18,13 +18,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"time"
 
 	"github.com/avelex/abidec"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
+	eth_types "github.com/ethereum/go-ethereum/core/types"
+	"github.com/eventscale/eventscale/internal/subjects"
+	"github.com/eventscale/eventscale/internal/types"
 	"github.com/lmittmann/w3/module/eth"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go/jetstream"
@@ -56,7 +57,7 @@ func NewEventExtractor(chainClient *BlockchainClient, log server.Logger, pub jet
 }
 
 func (e *EventExtractor) TargetSubject() string {
-	return SYSTEM_EVENT_EXTRACTOR_SUBJECT + "." + e.chainClient.Name()
+	return subjects.NetworkEventExtractor(e.chainClient.Name())
 }
 
 func (e *EventExtractor) HandleAddEventExtractor(ctx context.Context, msg jetstream.Msg) error {
@@ -89,7 +90,7 @@ func (e *EventExtractor) HandleBlocksRange(ctx context.Context, msg jetstream.Ms
 		return fmt.Errorf("failed to unmarshal blocks range: %w", err)
 	}
 
-	var logs []types.Log
+	var logs []eth_types.Log
 
 	if err := e.chainClient.CallCtx(ctx, eth.Logs(ethereum.FilterQuery{
 		FromBlock: big.NewInt(int64(br.Start)),
@@ -115,7 +116,22 @@ func (e *EventExtractor) HandleBlocksRange(ctx context.Context, msg jetstream.Ms
 	return nil
 }
 
-func (ext *EventExtractor) publishEvents(ctx context.Context, events []Event) error {
+func (ext *EventExtractor) processLogs(ctx context.Context, logs []eth_types.Log) error {
+	events, err := ext.logProcessor.ProcessLogsToEvents(ctx, logs)
+	if err != nil {
+		return fmt.Errorf("failed to process logs: %w", err)
+	}
+
+	if err := ext.publishEvents(ctx, events); err != nil {
+		ext.logger.Errorf("[%s] [EventExtractor] Failed to publish events: %v", ext.chainClient.Name(), err)
+
+		return fmt.Errorf("failed to publish events: %w", err)
+	}
+
+	return nil
+}
+
+func (ext *EventExtractor) publishEvents(ctx context.Context, events []types.Event) error {
 	bytes, err := json.Marshal(&events)
 	if err != nil {
 		return fmt.Errorf("failed to marshal events: %w", err)
@@ -123,22 +139,6 @@ func (ext *EventExtractor) publishEvents(ctx context.Context, events []Event) er
 
 	if _, err := ext.pub.Publish(ctx, ext.TargetSubject(), bytes); err != nil {
 		return fmt.Errorf("failed to publish events: %w", err)
-	}
-
-	return nil
-}
-
-func (ext *EventExtractor) processLogs(ctx context.Context, logs []types.Log) error {
-	events, err := ext.logProcessor.ProcessLogsToEvents(ctx, logs, time.Now().Unix())
-	if err != nil {
-		return fmt.Errorf("failed to process logs: %w", err)
-	}
-
-	for _, ev := range events {
-		if err := ext.publishEvents(ctx, []Event{ev}); err != nil {
-			ext.logger.Errorf("[%s] [EventExtractor] Failed to publish event: %v", ext.chainClient.Name(), err)
-			continue
-		}
 	}
 
 	return nil

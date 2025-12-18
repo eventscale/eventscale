@@ -11,40 +11,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package internal
+package subjects
 
 const (
 	STREAM_NAME = "eventscale"
 
 	SYSTEM_NEW_BLOCKS_SUBJECT                = "eventscale.system.new_blocks"
 	SYSTEM_EVENT_EXTRACTOR_SUBJECT           = "eventscale.system.event.extractor"
-	SYSTEM_BLOCKS_SUBJECT                    = "eventscale.system.blocks"
 	SYSTEM_EVENT_ADD_EVENT_EXTRACTOR_SUBJECT = "eventscale.system.add_event.extractor"
 
-	EVENTS_SUBJECT = "eventscale.events"
-	BLOCKS_SUBJECT = "eventscale.blocks"
+	EVENTS_SUBJECT        = "eventscale.events"
+	EVENTS_BLOCKS_SUBJECT = "eventscale.events_blocks"
+	BLOCKS_SUBJECT        = "eventscale.blocks"
 )
 
-func NetworkEventExtractorSubject(net string) string {
+func NetworkEventExtractor(net string) string {
 	return SYSTEM_EVENT_EXTRACTOR_SUBJECT + "." + net
 }
 
-func NetworkNewBlocksSubject(net string) string {
+func NetworkNewBlocks(net string) string {
 	return SYSTEM_NEW_BLOCKS_SUBJECT + "." + net
 }
 
-func NetworkAddEventExtractorSubject(net string) string {
+func NetworkAddEventExtractor(net string) string {
 	return SYSTEM_EVENT_ADD_EVENT_EXTRACTOR_SUBJECT + "." + net
 }
 
-func NetworkBlocksSubject(net string) string {
-	return SYSTEM_BLOCKS_SUBJECT + "." + net
-}
-
-func EventSubject(net string, contract string, eventName string) string {
+func Event(net, contract, eventName string) string {
 	return EVENTS_SUBJECT + "." + net + "." + contract + "." + eventName
 }
 
-func BlocksSubject(net string, blockNumber string) string {
+func EventsBlocks(net, blockNumber string) string {
+	return EVENTS_BLOCKS_SUBJECT + "." + net + "." + blockNumber
+}
+
+func Blocks(net, blockNumber string) string {
 	return BLOCKS_SUBJECT + "." + net + "." + blockNumber
 }

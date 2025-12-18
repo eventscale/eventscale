@@ -27,6 +27,7 @@ type BlockchainName string
 type Config struct {
 	Version  int             `yaml:"version"`
 	NATS     NATSConfig      `yaml:"nats"`
+	System   SystemConfig    `yaml:"system"`
 	Events   []EventConfig   `yaml:"events"`
 	Networks []NetworkConfig `yaml:"networks"`
 }
@@ -35,10 +36,19 @@ type NATSConfig struct {
 	Path string `yaml:"path"`
 }
 
+type SystemConfig struct {
+	BlockExtractor BlockExtractorConfig `yaml:"block_extractor"`
+}
+
+type BlockExtractorConfig struct {
+	Disabled bool `yaml:"disabled"`
+}
+
 type EventConfig struct {
-	Name      string                                       `yaml:"name"`
-	Signature string                                       `yaml:"signature"`
-	Networks  map[BlockchainName]map[common.Address]string `yaml:"networks"`
+	Name          string                                       `yaml:"name"`
+	Signature     string                                       `yaml:"signature"`
+	NeedOtherLogs bool                                         `yaml:"need_other_logs"`
+	Networks      map[BlockchainName]map[common.Address]string `yaml:"networks"`
 }
 
 type NetworkConfig struct {

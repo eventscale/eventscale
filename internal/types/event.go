@@ -11,13 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package internal
+package types
 
 import (
+	"encoding/json"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/eventscale/eventscale/internal/subjects"
 )
 
 type Event struct {
@@ -53,5 +55,9 @@ func (e *Event) TargetSubject(contractAlias ...string) string {
 	if len(contractAlias) > 0 && contractAlias[0] != "" {
 		contract = contractAlias[0]
 	}
-	return EventSubject(e.MetaData.Network, contract, e.MetaData.Name)
+	return subjects.Event(e.MetaData.Network, contract, e.MetaData.Name)
+}
+
+func (e *Event) Decode(v any) error {
+	return json.Unmarshal(e.Data, v)
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/eventscale/eventscale/internal"
+	"github.com/eventscale/eventscale/internal/subjects"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -56,7 +57,7 @@ type TargetEvent struct {
 }
 
 func (c *Context) AddTargetEventSync(ctx context.Context, event TargetEvent) error {
-	subj := internal.NetworkAddEventExtractorSubject(event.Network)
+	subj := subjects.NetworkAddEventExtractor(event.Network)
 
 	bytes, err := json.Marshal(&event)
 	if err != nil {
@@ -71,7 +72,7 @@ func (c *Context) AddTargetEventSync(ctx context.Context, event TargetEvent) err
 }
 
 func (c *Context) AddTargetEventAsync(ctx context.Context, event TargetEvent) error {
-	subj := internal.NetworkAddEventExtractorSubject(event.Network)
+	subj := subjects.NetworkAddEventExtractor(event.Network)
 
 	bytes, err := json.Marshal(&event)
 	if err != nil {

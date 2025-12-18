@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/eventscale/eventscale/internal/subjects"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -49,12 +50,12 @@ func StartServer(ctx context.Context, confPath string) error {
 	}
 
 	stream, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:      STREAM_NAME,
+		Name:      subjects.STREAM_NAME,
 		Retention: jetstream.LimitsPolicy,
 		Discard:   jetstream.DiscardOld,
 		MaxAge:    DefaultStreamMaxAge,
 		Subjects: []string{
-			STREAM_NAME + ".>",
+			subjects.STREAM_NAME + ".>",
 		},
 	})
 	if err != nil {
@@ -79,10 +80,13 @@ func StartServer(ctx context.Context, confPath string) error {
 
 	runners := make([]*NetRunner, 0, len(cfg.Networks))
 	for _, net := range cfg.Networks {
-		runner, err := InitNetRunner(extCtx, kv, NetRunnerConfig{
+		conf := NetRunnerConfig{
+			SysConf: cfg.System,
 			NetConf: net,
 			Events:  cfg.Events,
-		})
+		}
+
+		runner, err := InitNetRunner(extCtx, kv, conf)
 		if err != nil {
 			return fmt.Errorf("failed to init net runner: %w", err)
 		}
@@ -98,11 +102,11 @@ func StartServer(ctx context.Context, confPath string) error {
 
 	eventProducer := NewEventProducer(cfg.Events, js)
 
-	extCons, err := js.CreateOrUpdateConsumer(ctx, STREAM_NAME, jetstream.ConsumerConfig{
+	extCons, err := js.CreateOrUpdateConsumer(ctx, subjects.STREAM_NAME, jetstream.ConsumerConfig{
 		Name:          "event-extractor",
 		AckWait:       DefaultConsumerAckWait,
 		AckPolicy:     jetstream.AckExplicitPolicy,
-		FilterSubject: SYSTEM_EVENT_EXTRACTOR_SUBJECT + ".*",
+		FilterSubject: subjects.SYSTEM_EVENT_EXTRACTOR_SUBJECT + ".*",
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create consumer event-extractor: %w", err)
@@ -114,7 +118,7 @@ func StartServer(ctx context.Context, confPath string) error {
 
 	commonLogger.Noticef("Event extractor consumer created")
 
-	wg := sync.WaitGroup{}
+	wg := &sync.WaitGroup{}
 	wg.Add(len(runners))
 
 	// Channel to collect errors from runners

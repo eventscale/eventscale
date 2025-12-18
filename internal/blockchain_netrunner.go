@@ -20,12 +20,14 @@ import (
 
 	"github.com/avelex/abidec"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/eventscale/eventscale/internal/subjects"
 	"github.com/lmittmann/w3"
 	"github.com/nats-io/nats.go/jetstream"
 	"golang.org/x/time/rate"
 )
 
 type NetRunnerConfig struct {
+	SysConf SystemConfig
 	NetConf NetworkConfig
 	Events  []EventConfig
 }
@@ -43,22 +45,24 @@ func (c NetRunnerConfig) GetTargetEvents() ([]*TargetEvent, error) {
 			return nil, fmt.Errorf("failed to parse event signature: %w", err)
 		}
 
-		contractsSlice := make([]common.Address, 0, len(contracts))
+		targetContracts := make([]common.Address, 0, len(contracts))
 		for c := range contracts {
-			contractsSlice = append(contractsSlice, c)
+			targetContracts = append(targetContracts, c)
 		}
 
 		targetEvents = append(targetEvents, &TargetEvent{
-			Name:      e.Name,
-			Signature: e.Signature,
-			Contracts: contractsSlice,
-			Abi:       abiEv,
+			Name:          e.Name,
+			Signature:     e.Signature,
+			NeedOtherLogs: e.NeedOtherLogs,
+			Contracts:     targetContracts,
+			Abi:           abiEv,
 		})
 	}
 	return targetEvents, nil
 }
 
 type NetRunner struct {
+	conf           NetRunnerConfig
 	chainClient    *BlockchainClient
 	blockListener  *BlockListener
 	eventExtractor *EventExtractor
@@ -92,6 +96,7 @@ func InitNetRunner(ctx Context, kv jetstream.KeyValue, conf NetRunnerConfig) (*N
 	blockListener := NewBlockListener(conf.NetConf.BlocksProcessing, chainClient, ctx.Logger, ctx.JetStream, kv, []BlocksSubscriber{})
 
 	return &NetRunner{
+		conf:           conf,
 		chainClient:    chainClient,
 		blockListener:  blockListener,
 		eventExtractor: eventExtractor,
@@ -107,7 +112,7 @@ func (n *NetRunner) Register(ctx Context) error {
 		ReplayPolicy:   jetstream.ReplayInstantPolicy,
 		AckPolicy:      jetstream.AckExplicitPolicy,
 		AckWait:        5 * time.Minute,
-		FilterSubjects: []string{NetworkNewBlocksSubject(n.chainClient.Name())},
+		FilterSubjects: []string{subjects.NetworkNewBlocks(n.chainClient.Name())},
 	})
 	if err != nil {
 		return fmt.Errorf("create pull consumer new-blocks-for-event-extractor: %w", err)
@@ -122,26 +127,28 @@ func (n *NetRunner) Register(ctx Context) error {
 		return fmt.Errorf("register consumer for new-blocks-for-event-extractor: %w", err)
 	}
 
-	newBlocksForBlockCons, err := ctx.stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		Name:           "new-blocks-for-block-producer-" + n.chainClient.Name(),
-		Durable:        "new-blocks-for-block-producer-" + n.chainClient.Name(),
-		DeliverPolicy:  jetstream.DeliverLastPerSubjectPolicy,
-		ReplayPolicy:   jetstream.ReplayInstantPolicy,
-		AckPolicy:      jetstream.AckExplicitPolicy,
-		AckWait:        5 * time.Minute,
-		FilterSubjects: []string{NetworkNewBlocksSubject(n.chainClient.Name())},
-	})
-	if err != nil {
-		return fmt.Errorf("create pull consumer new-blocks-for-block-producer: %w", err)
-	}
+	if !n.conf.SysConf.BlockExtractor.Disabled {
+		newBlocksForBlockCons, err := ctx.stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+			Name:           "new-blocks-for-block-producer-" + n.chainClient.Name(),
+			Durable:        "new-blocks-for-block-producer-" + n.chainClient.Name(),
+			DeliverPolicy:  jetstream.DeliverLastPerSubjectPolicy,
+			ReplayPolicy:   jetstream.ReplayInstantPolicy,
+			AckPolicy:      jetstream.AckExplicitPolicy,
+			AckWait:        5 * time.Minute,
+			FilterSubjects: []string{subjects.NetworkNewBlocks(n.chainClient.Name())},
+		})
+		if err != nil {
+			return fmt.Errorf("create pull consumer new-blocks-for-block-producer: %w", err)
+		}
 
-	if _, err := newBlocksForBlockCons.Consume(
-		messageHandlerWrapper(n.blockExtractor.HandleBlocks),
-		jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
-			ctx.Logger.Errorf("[%s] Failed to consume new-blocks-for-block-producer: %v", n.chainClient.Name(), err)
-		}),
-	); err != nil {
-		return fmt.Errorf("register consumer for new-blocks-for-block-producer: %w", err)
+		if _, err := newBlocksForBlockCons.Consume(
+			messageHandlerWrapper(n.blockExtractor.HandleBlocks),
+			jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
+				ctx.Logger.Errorf("[%s] Failed to consume new-blocks-for-block-producer: %v", n.chainClient.Name(), err)
+			}),
+		); err != nil {
+			return fmt.Errorf("register consumer for new-blocks-for-block-producer: %w", err)
+		}
 	}
 
 	addEventCons, err := ctx.stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
@@ -151,7 +158,7 @@ func (n *NetRunner) Register(ctx Context) error {
 		ReplayPolicy:   jetstream.ReplayInstantPolicy,
 		AckPolicy:      jetstream.AckExplicitPolicy,
 		AckWait:        1 * time.Minute,
-		FilterSubjects: []string{NetworkAddEventExtractorSubject(n.chainClient.Name())},
+		FilterSubjects: []string{subjects.NetworkAddEventExtractor(n.chainClient.Name())},
 	})
 	if err != nil {
 		return fmt.Errorf("create push consumer add-event-extractor: %w", err)
@@ -174,11 +181,7 @@ func (n *NetRunner) Start(ctx context.Context) error {
 }
 
 // Stop gracefully stops the NetRunner and all its components
-func (n *NetRunner) Stop() {
-	if n.blockExtractor != nil {
-		n.blockExtractor.Stop()
-	}
-}
+func (n *NetRunner) Stop() {}
 
 func messageHandlerWrapper(handler JetStreamHandlerFunc) jetstream.MessageHandler {
 	return func(msg jetstream.Msg) {

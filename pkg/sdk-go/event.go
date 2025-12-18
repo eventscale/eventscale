@@ -5,19 +5,16 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/eventscale/eventscale/internal"
+	"github.com/eventscale/eventscale/internal/subjects"
+	"github.com/eventscale/eventscale/internal/types"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
 const ANY_TOKEN = "*"
 
 type Event struct {
-	internal.Event
+	types.Event
 	Topic string
-}
-
-func (e Event) Decode(v any) error {
-	return json.Unmarshal(e.Data, v)
 }
 
 type EventHandlerFunc func(ctx context.Context, event Event) error
@@ -67,7 +64,7 @@ func WithEventConsumerName(name string) EventOpt {
 }
 
 func SubscribeEvent(ctx *Context, handler EventHandlerFunc, opts ...EventOpt) (*EventSubscriber, error) {
-	stream, err := ctx.JetStream.Stream(ctx, internal.STREAM_NAME)
+	stream, err := ctx.JetStream.Stream(ctx, subjects.STREAM_NAME)
 	if err != nil {
 		return nil, err
 	}
@@ -115,12 +112,12 @@ func (e *EventSubscriber) Start(ctx context.Context) {
 }
 
 func (e *EventSubscriber) TartgetSubject() string {
-	return internal.EventSubject(e.network, e.contract, e.event)
+	return subjects.Event(e.network, e.contract, e.event)
 }
 
 func EventHandlerWrapper(handler EventHandlerFunc) jetstream.MessageHandler {
 	return func(msg jetstream.Msg) {
-		var event internal.Event
+		var event types.Event
 		if err := json.Unmarshal(msg.Data(), &event); err != nil {
 			msg.Nak()
 			return

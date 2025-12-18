@@ -19,12 +19,13 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/eventscale/eventscale/internal"
+	"github.com/eventscale/eventscale/internal/subjects"
+	"github.com/eventscale/eventscale/internal/types"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
 type Block struct {
-	internal.BlockEvent
+	types.Block
 	Topic string
 }
 
@@ -60,7 +61,7 @@ func WithBlockConsumerName(name string) BlockOpt {
 }
 
 func SubscribeBlock(ctx *Context, handler BlockHandlerFunc, opts ...BlockOpt) (*BlockSubscriber, error) {
-	stream, err := ctx.JetStream.Stream(ctx, internal.STREAM_NAME)
+	stream, err := ctx.JetStream.Stream(ctx, subjects.STREAM_NAME)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get stream: %w", err)
 	}
@@ -105,12 +106,12 @@ func (e *BlockSubscriber) Start(ctx context.Context) {
 }
 
 func (e *BlockSubscriber) TartgetSubject() string {
-	return internal.BlocksSubject(e.network, ANY_TOKEN)
+	return subjects.Blocks(e.network, ANY_TOKEN)
 }
 
 func BlockHandlerWrapper(handler BlockHandlerFunc) jetstream.MessageHandler {
 	return func(msg jetstream.Msg) {
-		var block internal.BlockEvent
+		var block types.Block
 		if err := json.Unmarshal(msg.Data(), &block); err != nil {
 			msg.Nak()
 			return

@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"math/big"
 	"sync"
-	"time"
 
-	"github.com/ethereum/go-ethereum/core/types"
+	eth_types "github.com/ethereum/go-ethereum/core/types"
+	"github.com/eventscale/eventscale/internal/types"
 	"github.com/lmittmann/w3/module/eth"
 	"github.com/lmittmann/w3/w3types"
 	"github.com/nats-io/nats-server/v2/server"
@@ -23,36 +23,17 @@ type BlockExtractor struct {
 
 	blocksLock *sync.Mutex
 	blocks     []BlocksRange
-
-	ctx    context.Context
-	cancel context.CancelFunc
 }
 
 func NewBlockExtractor(logger server.Logger, chainClient *BlockchainClient, pub jetstream.Publisher, logProcessor *LogProcessor) *BlockExtractor {
-	ctx, cancel := context.WithCancel(context.Background())
-
-	ext := &BlockExtractor{
+	return &BlockExtractor{
 		logger:       logger,
 		chainClient:  chainClient,
 		pub:          pub,
 		logProcessor: logProcessor,
 		blocksLock:   &sync.Mutex{},
 		blocks:       make([]BlocksRange, 0),
-		ctx:          ctx,
-		cancel:       cancel,
 	}
-
-	go ext.processBlocks(ctx)
-
-	return ext
-}
-
-func (b *BlockExtractor) HandleBlocksRange(ctx context.Context, br BlocksRange) error {
-	b.blocksLock.Lock()
-	b.blocks = append(b.blocks, br)
-	b.blocksLock.Unlock()
-
-	return nil
 }
 
 func (b *BlockExtractor) HandleBlocks(ctx context.Context, msg jetstream.Msg) error {
@@ -66,33 +47,8 @@ func (b *BlockExtractor) HandleBlocks(ctx context.Context, msg jetstream.Msg) er
 	return b.handleBlocks(ctx, br)
 }
 
-func (b *BlockExtractor) processBlocks(ctx context.Context) error {
-	ticker := time.NewTicker(DefaultBlockProcessorTick)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			br, ok := b.readFirstBlock()
-			if !ok {
-				continue
-			}
-
-			if err := b.handleBlocks(ctx, br); err != nil {
-				b.logger.Errorf("[%s] [BlockExtractor] Failed to handle blocks: %v", b.chainClient.Name(), err)
-
-				return fmt.Errorf("handle blocks: %w", err)
-			}
-
-			b.dequeueBlock()
-		}
-	}
-}
-
 func (b *BlockExtractor) handleBlocks(ctx context.Context, br BlocksRange) error {
-	headers := make([]*types.Header, br.Len())
+	headers := make([]*eth_types.Header, br.Len())
 	calls := make([]w3types.RPCCaller, br.Len())
 	index := 0
 
@@ -108,15 +64,15 @@ func (b *BlockExtractor) handleBlocks(ctx context.Context, br BlocksRange) error
 	}
 
 	for _, header := range headers {
-		blockEvent := NewBlockEvent(b.chainClient.Name(), b.chainClient.ChainID(), header)
-		payload, err := json.Marshal(blockEvent)
+		block := types.NewBlock(b.chainClient.Name(), b.chainClient.ChainID(), header)
+		payload, err := json.Marshal(block)
 		if err != nil {
 			b.logger.Errorf("[%s] [BlockExtractor] Failed to marshal block event: %v", b.chainClient.Name(), err)
 
 			return fmt.Errorf("marshal block event: %w", err)
 		}
 
-		if _, err := b.pub.Publish(ctx, blockEvent.TargetSubject(), payload); err != nil {
+		if _, err := b.pub.Publish(ctx, block.TargetSubject(), payload); err != nil {
 			b.logger.Errorf("[%s] [BlockExtractor] Failed to publish block event: %v", b.chainClient.Name(), err)
 
 			return fmt.Errorf("publish block event: %w", err)
@@ -126,37 +82,4 @@ func (b *BlockExtractor) handleBlocks(ctx context.Context, br BlocksRange) error
 	b.logger.Debugf("[%s] [BlockExtractor] Processed blocks range: %d - %d", b.chainClient.Name(), br.Start, br.End)
 
 	return nil
-}
-
-func (b *BlockExtractor) processLogs(ctx context.Context, header *types.Header, logs []types.Log) ([]Event, error) {
-	return b.logProcessor.ProcessLogsToEvents(ctx, logs, int64(header.Time))
-}
-
-func (b *BlockExtractor) readFirstBlock() (BlocksRange, bool) {
-	b.blocksLock.Lock()
-	defer b.blocksLock.Unlock()
-
-	if len(b.blocks) == 0 {
-		return BlocksRange{}, false
-	}
-
-	return b.blocks[0], true
-}
-
-func (b *BlockExtractor) dequeueBlock() {
-	b.blocksLock.Lock()
-	defer b.blocksLock.Unlock()
-
-	if len(b.blocks) == 0 {
-		return
-	}
-
-	b.blocks = b.blocks[1:]
-}
-
-// Stop gracefully stops the block extractor
-func (b *BlockExtractor) Stop() {
-	if b.cancel != nil {
-		b.cancel()
-	}
 }

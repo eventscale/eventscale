@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/eventscale/eventscale/internal/subjects"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -59,26 +60,26 @@ func NewBlockListener(cfg BlocksProcessingConfig, chainClient *BlockchainClient,
 }
 
 func (l *BlockListener) TargetSubject() string {
-	return SYSTEM_NEW_BLOCKS_SUBJECT + "." + l.chainClient.Name()
+	return subjects.NetworkNewBlocks(l.chainClient.Name())
 }
 
 func (l *BlockListener) Listen(ctx context.Context) error {
 	ticker := time.NewTicker(l.cfg.Interval)
 	defer ticker.Stop()
 
-	startedBlock, err := l.getStartedBlock(ctx)
+	currentBlock, err := l.getStartedBlock(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get started block: %w", err)
 	}
 
-	l.logger.Debugf("[%s] [BlockListener] Started from block: %d", l.chainClient.Name(), startedBlock)
+	l.logger.Debugf("[%s] [BlockListener] Started from block: %d", l.chainClient.Name(), currentBlock)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			processedBlock, err := l.processBlocks(ctx, startedBlock)
+			processedBlock, err := l.processBlocks(ctx, currentBlock)
 			if err != nil {
 				l.logger.Errorf("[%s] [BlockListener] Failed to process blocks: %v", l.chainClient.Name(), err)
 
@@ -91,38 +92,31 @@ func (l *BlockListener) Listen(ctx context.Context) error {
 				continue
 			}
 
-			startedBlock = processedBlock + 1
+			currentBlock = processedBlock + 1
 		}
 	}
 }
 
 // processBlocks handles the complete block processing cycle and returns the new starting block
-func (l *BlockListener) processBlocks(ctx context.Context, startedBlock uint64) (uint64, error) {
+func (l *BlockListener) processBlocks(ctx context.Context, block uint64) (uint64, error) {
 	currentBlock, err := l.getCurrentBlock(ctx)
 	if err != nil {
-		return startedBlock, err
-	}
-
-	// Skip processing if started block is higher than current block
-	if startedBlock > currentBlock {
-		l.logger.Tracef("[%s] [BlockListener] Started block %d is ahead of current block %d, skipping", l.chainClient.Name(), startedBlock, currentBlock)
-
-		return startedBlock, nil
+		return block, err
 	}
 
 	// Calculate block range to process
-	blocksRange, hasNewBlocks := l.calculateBlockRange(startedBlock, currentBlock)
+	blocksRange, hasNewBlocks := l.calculateBlockRange(block, currentBlock)
 	if !hasNewBlocks {
 		l.logger.Debugf("[%s] [BlockListener] No new blocks to process", l.chainClient.Name())
 
-		return startedBlock, nil
+		return block, fmt.Errorf("waiting for new blocks")
 	}
 
 	// Publish the new blocks range
 	if err := l.publishNewBlocks(ctx, blocksRange); err != nil {
 		l.logger.Errorf("[%s] [BlockListener] Failed to publish blocks range %d-%d: %v", l.chainClient.Name(), blocksRange.Start, blocksRange.End, err)
 
-		return startedBlock, fmt.Errorf("failed to publish blocks range %d-%d: %w", blocksRange.Start, blocksRange.End, err)
+		return block, fmt.Errorf("failed to publish blocks range %d-%d: %w", blocksRange.Start, blocksRange.End, err)
 	}
 
 	l.logger.Debugf("[%s] [BlockListener] Published new blocks range: %d - %d", l.chainClient.Name(), blocksRange.Start, blocksRange.End)
